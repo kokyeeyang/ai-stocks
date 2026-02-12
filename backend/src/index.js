@@ -14,23 +14,27 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
-const allowlist = [
-  process.env.FRONTEND_ORIGIN, // e.g. https://ai-stocks-omega.vercel.app
-  // add custom domain if you have one
-].filter(Boolean);
+const PROD_ORIGIN = (process.env.FRONTEND_ORIGIN || "").replace(/\/$/, "");
+
+// allow: https://<project>-<hash>-<team>-projects-<id>.vercel.app
+const VERCEL_PREVIEW_REGEX =
+  /^https:\/\/ai-stocks-.*\.vercel\.app$/;
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // allow server-to-server
-    if (allowlist.includes(origin)) return cb(null, true);
+    if (!origin) return cb(null, true); // Postman / server-to-server
 
-    // allow Vercel preview deploys:
-    if (/^https:\/\/ai-stocks-omega-.*\.vercel\.app$/.test(origin)) return cb(null, true);
+    const o = origin.replace(/\/$/, "");
 
-    return cb(new Error(`CORS blocked: ${origin}`));
+    if (o === PROD_ORIGIN) return cb(null, true);
+    if (VERCEL_PREVIEW_REGEX.test(o)) return cb(null, true);
+
+    return cb(new Error(`CORS blocked: ${o}`));
   },
   credentials: true,
 }));
+
+app.options("*", cors()); // preflight
 
 // app.use(
 //   cors({
