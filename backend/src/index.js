@@ -13,12 +13,31 @@ const app = express();
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
-app.use(
-  cors({
-    origin: process.env.FRONTEND_ORIGIN,
-    credentials: true
-  })
-);
+
+const allowlist = [
+  process.env.FRONTEND_ORIGIN, // e.g. https://ai-stocks-omega.vercel.app
+  // add custom domain if you have one
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // allow server-to-server
+    if (allowlist.includes(origin)) return cb(null, true);
+
+    // allow Vercel preview deploys:
+    if (/^https:\/\/ai-stocks-omega-.*\.vercel\.app$/.test(origin)) return cb(null, true);
+
+    return cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+}));
+
+// app.use(
+//   cors({
+//     origin: process.env.FRONTEND_ORIGIN,
+//     credentials: true
+//   })
+// );
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
