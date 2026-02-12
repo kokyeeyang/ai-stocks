@@ -1,3 +1,4 @@
+import "./globals.css";
 export const metadata = {
   title: "AI Stock Analyzer",
   description: "AI-powered stock analysis tool",

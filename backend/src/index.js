@@ -210,6 +210,7 @@ function computeSimpleStats(rows, days = 30) {
  * Analysis endpoint with caching
  */
 app.get("/stocks/analyze", requireAuth, async (req, res) => {
+  console.log('hellooo');
   const ticker = String(req.query.ticker || "").trim().toUpperCase();
   if (!/^[A-Z.]{1,10}$/.test(ticker)) {
     return res.status(400).json({ error: "Invalid ticker format" });
