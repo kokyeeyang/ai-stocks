@@ -247,7 +247,6 @@ app.get("/stocks/analyze", requireAuth, async (req, res) => {
 
   const completion = await openai.chat.completions.create({
     model,
-    temperature: 0.2,
     messages: [
       {
         role: "system",

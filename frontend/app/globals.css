@@ -2,7 +2,84 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Optional but nice defaults */
-html, body {
-  height: 100%;
+:root {
+  /* Theme tokens */
+  --bg: 10 12 16;          /* near-black */
+  --panel: 15 18 24;       /* card */
+  --border: 35 42 56;      /* subtle border */
+  --text: 235 240 255;     /* primary text */
+  --muted: 160 170 190;    /* secondary text */
+  --accent: 99 102 241;    /* indigo */
+  --accent2: 34 211 238;   /* cyan */
+}
+
+@layer base {
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    background: rgb(var(--bg));
+    color: rgb(var(--text));
+  }
+
+  /* nicer defaults */
+  * {
+    border-color: rgb(var(--border));
+  }
+}
+
+@layer components {
+  /* Layout */
+  .page {
+    @apply min-h-screen;
+  }
+  .container-app {
+    @apply mx-auto w-full max-w-6xl px-4 sm:px-6;
+  }
+
+  /* Surfaces */
+  .card {
+    @apply rounded-2xl border bg-[rgb(var(--panel))] shadow-sm;
+  }
+  .card-pad {
+    @apply p-5 sm:p-6;
+  }
+
+  /* Text */
+  .h1 {
+    @apply text-2xl sm:text-3xl font-semibold tracking-tight;
+  }
+  .h2 {
+    @apply text-lg sm:text-xl font-semibold;
+  }
+  .muted {
+    @apply text-[rgb(var(--muted))];
+  }
+
+  /* Inputs */
+  .input {
+    @apply w-full rounded-xl border bg-transparent px-4 py-3 outline-none
+           placeholder:text-[rgb(var(--muted))]
+           focus:ring-2 focus:ring-[rgb(var(--accent))]/40;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3
+           font-medium transition active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn text-white
+           bg-gradient-to-r from-[rgb(var(--accent))] to-[rgb(var(--accent2))]
+           hover:opacity-95;
+  }
+  .btn-ghost {
+    @apply btn border bg-transparent hover:bg-white/5;
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center rounded-full border px-2.5 py-1 text-xs;
+  }
 }
