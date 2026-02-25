@@ -1,0 +1,42 @@
+name: Ingest prices (nightly)
+
+on:
+  schedule:
+    # 02:10 UTC daily (≈ 10:10 Malaysia time, adjust as you like)
+    - cron: "10 2 * * *"
+  workflow_dispatch: {} # allow manual run from GitHub UI
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Ingest prices
+        run: node scripts/ingest-prices.js AAPL MSFT NVDA TSLA AMZN GOOGL
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

@@ -137,7 +137,12 @@ app.post("/auth/login", async (req, res) => {
 });
 
 app.post("/auth/logout", (req, res) => {
-  res.clearCookie(COOKIE_NAME, { path: "/" });
+  res.clearCookie(COOKIE_NAME, {
+    httpOnly: true,
+    secure: isProd(),
+    sameSite: isProd() ? "none" : "lax",
+    path: "/",
+  });
   res.json({ ok: true });
 });
 
@@ -193,7 +198,7 @@ function computeSimpleStats(rows, days = 30) {
     vol += Math.abs((cur - prev) / prev) * 100;
   }
   const avgAbsDailyMovePct = vol / Math.max(1, recent.length - 1);
-
+  
   return {
     windowDays: recent.length,
     startDate: first?.date,
@@ -210,7 +215,6 @@ function computeSimpleStats(rows, days = 30) {
  * Analysis endpoint with caching
  */
 app.get("/stocks/analyze", requireAuth, async (req, res) => {
-  console.log('hellooo');
   const ticker = String(req.query.ticker || "").trim().toUpperCase();
   if (!/^[A-Z.]{1,10}$/.test(ticker)) {
     return res.status(400).json({ error: "Invalid ticker format" });
@@ -231,11 +235,42 @@ app.get("/stocks/analyze", requireAuth, async (req, res) => {
     return res.json({ ok: true, cached: true, ticker, summary: cached.summary, data: cached.dataJson });
   }
 
-  const rows = await fetchStooqDaily(ticker);
-  const stats = computeSimpleStats(rows, 60);
+  // const rows = await fetchStooqDaily(ticker);
+  const dbRowsDesc = await prisma.dailyPrice.findMany({
+    where: { symbol: ticker },
+    orderBy: { date: "desc" },
+    take: 120,
+  });
+
+  if (dbRowsDesc.length < 30) {
+    return res.status(400).json({
+      error: "Not enough historical data in DB, please run ingest job first",
+    });
+  }
+
+  // Reverse into ascending chronological order for stats computations
+  const dbRows = dbRowsDesc.slice().reverse();
+
+  // Map into the same shape your existing stats code expects
+  const mapped = dbRows.map((r) => ({
+    date: r.date.toISOString().slice(0, 10),
+    open: r.open ?? 0,
+    high: r.high ?? 0,
+    low: r.low ?? 0,
+    close: r.close,
+    // Neon/Prisma returns bigint -> convert for JSON safety
+    volume: r.volume ? Number(r.volume) : 0,
+  }));
+
+  const stats = computeSimpleStats(mapped, 60);
+  const last20 = mapped.slice(-20).map((r) => ({
+    date: r.date,
+    close: r.close,
+    volume: r.volume,
+  }));
 
   // Keep tokens low: send only distilled stats + last N closes
-  const last20 = rows.slice(-20).map((r) => ({ date: r.date, close: r.close, volume: r.volume }));
+  // const last20 = rows.slice(-20).map((r) => ({ date: r.date, close: r.close, volume: r.volume }));
 
   const prompt = {
     ticker,
