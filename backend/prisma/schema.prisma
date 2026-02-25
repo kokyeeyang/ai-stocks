@@ -8,10 +8,10 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
+  id        String          @id @default(cuid())
+  email     String          @unique
   password  String
-  createdAt DateTime @default(now())
+  createdAt DateTime        @default(now())
   analyses  StockAnalysis[]
 }
 
@@ -22,8 +22,35 @@ model StockAnalysis {
   dataJson  Json
   createdAt DateTime @default(now())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   @@index([userId, ticker, createdAt])
+}
+
+model Ticker {
+  id        String   @id @default(cuid())
+  symbol    String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prices DailyPrice[]
+}
+
+model DailyPrice {
+  id     String   @id @default(cuid())
+  symbol String
+  date   DateTime
+  open   Float?
+  high   Float?
+  low    Float?
+  close  Float
+  volume BigInt?
+
+  createdAt DateTime @default(now())
+  ticker    Ticker   @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@unique([symbol, date])
+  @@index([symbol, date])
 }
