@@ -11,10 +11,14 @@ type User = {
 };
 
 type AnalysisResult = {
+  id: string;
   cached: boolean;
   ticker: string;
   summary: string;
   data: unknown;
+  createdAt: string;
+  watchlistId: string | null;
+  portfolioId: string | null;
 };
 
 type WatchlistItem = {
@@ -70,6 +74,7 @@ export default function Dashboard() {
   const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceMsg, setWorkspaceMsg] = useState("");
+  const [recentAnalyses, setRecentAnalyses] = useState<AnalysisResult[]>([]);
 
   const [newWatchlistName, setNewWatchlistName] = useState("");
   const [watchlistTickerInputs, setWatchlistTickerInputs] = useState<Record<string, string>>({});
@@ -106,20 +111,23 @@ export default function Dashboard() {
     setWorkspaceMsg("");
 
     try {
-      const [watchlistsResp, portfoliosResp] = await Promise.all([
+      const [watchlistsResp, portfoliosResp, analysesResp] = await Promise.all([
         fetch(`${API}/watchlists`, { credentials: "include" }),
         fetch(`${API}/portfolios`, { credentials: "include" }),
+        fetch(`${API}/analyses?limit=12`, { credentials: "include" }),
       ]);
 
-      if (!watchlistsResp.ok || !portfoliosResp.ok) {
+      if (!watchlistsResp.ok || !portfoliosResp.ok || !analysesResp.ok) {
         throw new Error("Failed to load workspace");
       }
 
       const watchlistsData = await watchlistsResp.json();
       const portfoliosData = await portfoliosResp.json();
+      const analysesData = await analysesResp.json();
 
       setWatchlists(watchlistsData.watchlists || []);
       setPortfolios(portfoliosData.portfolios || []);
+      setRecentAnalyses(analysesData.analyses || []);
     } catch {
       setWorkspaceMsg("Failed to load portfolios and watchlists.");
     } finally {
@@ -127,7 +135,7 @@ export default function Dashboard() {
     }
   }
 
-  async function analyze() {
+  async function analyze(options?: { ticker?: string; watchlistId?: string; portfolioId?: string }) {
     setMsg("");
     setResult(null);
 
@@ -136,9 +144,20 @@ export default function Dashboard() {
       return;
     }
 
+    const activeTicker = (options?.ticker || ticker).trim().toUpperCase();
+    if (!activeTicker) {
+      setMsg("Enter a valid ticker.");
+      return;
+    }
+
+    setTicker(activeTicker);
     setLoading(true);
     try {
-      const resp = await fetch(`${API}/stocks/analyze?ticker=${encodeURIComponent(ticker)}`, {
+      const query = new URLSearchParams({ ticker: activeTicker });
+      if (options?.watchlistId) query.set("watchlistId", options.watchlistId);
+      if (options?.portfolioId) query.set("portfolioId", options.portfolioId);
+
+      const resp = await fetch(`${API}/stocks/analyze?${query.toString()}`, {
         credentials: "include",
       });
 
@@ -150,6 +169,7 @@ export default function Dashboard() {
 
       setResult(data);
       setMsg(data.cached ? "Loaded cached analysis (<=12h old)." : "Fresh analysis generated.");
+      await loadWorkspace();
     } catch {
       setMsg("Network error. Please try again.");
     } finally {
@@ -232,7 +252,6 @@ export default function Dashboard() {
 
   async function createPortfolio(e: FormEvent) {
     e.preventDefault();
-    console.log('qweqeqweq');
     if (!API || !newPortfolioName.trim()) return;
 
     setWorkspaceMsg("");
@@ -312,6 +331,13 @@ export default function Dashboard() {
 
   if (checkingAuth) {
     return null;
+  }
+
+  const lastAnalysisByTicker = new Map<string, AnalysisResult>();
+  for (const analysis of recentAnalyses) {
+    if (!lastAnalysisByTicker.has(analysis.ticker)) {
+      lastAnalysisByTicker.set(analysis.ticker, analysis);
+    }
   }
 
   return (
@@ -444,10 +470,15 @@ export default function Dashboard() {
                                 <button
                                   type="button"
                                   className="hover:underline"
-                                  onClick={() => setTicker(item.symbol)}
+                                  onClick={() => analyze({ ticker: item.symbol, watchlistId: watchlist.id })}
                                 >
                                   {item.symbol}
                                 </button>
+                                <span className="text-[10px] muted">
+                                  {lastAnalysisByTicker.get(item.symbol)?.createdAt
+                                    ? new Date(lastAnalysisByTicker.get(item.symbol)!.createdAt).toLocaleDateString()
+                                    : "new"}
+                                </span>
                                 <button
                                   type="button"
                                   className="text-xs muted hover:text-white"
@@ -496,6 +527,42 @@ export default function Dashboard() {
                     </details>
                   </div>
                 )}
+              </div>
+
+              <div className="card card-pad">
+                <h2 className="h2">Recent analyses</h2>
+                <p className="mt-1 text-sm muted">Saved history across your account.</p>
+
+                <div className="mt-6 space-y-3">
+                  {recentAnalyses.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed p-4 text-sm muted">
+                      No saved analyses yet.
+                    </div>
+                  ) : (
+                    recentAnalyses.map((analysis) => (
+                      <button
+                        key={analysis.id}
+                        type="button"
+                        className="w-full rounded-2xl border bg-black/10 p-4 text-left hover:bg-white/5"
+                        onClick={() => {
+                          setTicker(analysis.ticker);
+                          setResult(analysis);
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="badge">{analysis.ticker}</span>
+                            <span className="badge muted">{analysis.cached ? "Cached" : "Fresh"}</span>
+                          </div>
+                          <span className="text-xs muted">
+                            {new Date(analysis.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="mt-3 line-clamp-3 text-sm muted">{analysis.summary}</p>
+                      </button>
+                    ))
+                  )}
+                </div>
               </div>
 
               <div className="card card-pad">
@@ -615,7 +682,7 @@ export default function Dashboard() {
                                     <button
                                       type="button"
                                       className="font-medium hover:underline"
-                                      onClick={() => setTicker(holding.symbol)}
+                                      onClick={() => analyze({ ticker: holding.symbol, portfolioId: portfolio.id })}
                                     >
                                       {holding.symbol}
                                     </button>

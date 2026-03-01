@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { PrismaPg } from "@prisma/adapter-pg";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -7,8 +8,12 @@ import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { z } from "zod";
 import OpenAI from "openai";
+import pg from "pg";
 
-const prisma = new PrismaClient();
+const connectionString = process.env.DATABASE_URL;
+const pool = new pg.Pool({ connectionString });
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter });
 const app = express();
 
 app.use(express.json({ limit: "1mb" }));
@@ -45,6 +50,11 @@ const portfolioHoldingUpdateSchema = z.object({
   (value) => value.quantity !== undefined || value.averageCost !== undefined || value.notes !== undefined,
   { message: "At least one field must be provided" }
 );
+const analyzeQuerySchema = z.object({
+  ticker: tickerSchema,
+  watchlistId: z.string().trim().min(1).optional(),
+  portfolioId: z.string().trim().min(1).optional(),
+});
 
 app.use(cors({
   origin: (origin, cb) => {
@@ -142,6 +152,19 @@ async function getOwnedPortfolioOrNull(userId, portfolioId) {
   return prisma.portfolio.findFirst({
     where: { id: portfolioId, userId },
   });
+}
+
+function toAnalysisResponse(analysis) {
+  return {
+    id: analysis.id,
+    ticker: analysis.ticker,
+    summary: analysis.summary,
+    data: analysis.dataJson,
+    cached: analysis.cached,
+    createdAt: analysis.createdAt,
+    watchlistId: analysis.watchlistId,
+    portfolioId: analysis.portfolioId,
+  };
 }
 
 app.post("/auth/signup", async (req, res) => {
@@ -277,7 +300,6 @@ app.delete("/watchlists/:id/items/:symbol", requireAuth, async (req, res) => {
 });
 
 app.get("/portfolios", requireAuth, async (req, res) => {
-  console.log('here la!!!');
   const portfolios = await prisma.portfolio.findMany({
     where: { userId: req.user.sub },
     include: {
@@ -311,7 +333,6 @@ app.get("/portfolios", requireAuth, async (req, res) => {
 });
 
 app.post("/portfolios", requireAuth, async (req, res) => {
-  console.log('i am here!!!!');
   const parsed = portfolioSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -445,6 +466,58 @@ app.get("/portfolios/:id/summary", requireAuth, async (req, res) => {
   });
 });
 
+app.get("/analyses", requireAuth, async (req, res) => {
+  const ticker = req.query.ticker ? String(req.query.ticker).trim().toUpperCase() : undefined;
+  const watchlistId = req.query.watchlistId ? String(req.query.watchlistId).trim() : undefined;
+  const portfolioId = req.query.portfolioId ? String(req.query.portfolioId).trim() : undefined;
+  const take = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+
+  const analyses = await prisma.stockAnalysis.findMany({
+    where: {
+      userId: req.user.sub,
+      ...(ticker ? { ticker } : {}),
+      ...(watchlistId ? { watchlistId } : {}),
+      ...(portfolioId ? { portfolioId } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    take,
+  });
+
+  res.json({ ok: true, analyses: analyses.map(toAnalysisResponse) });
+});
+
+app.get("/watchlists/:id/analyses", requireAuth, async (req, res) => {
+  const watchlist = await getOwnedWatchlistOrNull(req.user.sub, req.params.id);
+  if (!watchlist) return res.status(404).json({ error: "Watchlist not found" });
+
+  const analyses = await prisma.stockAnalysis.findMany({
+    where: {
+      userId: req.user.sub,
+      watchlistId: watchlist.id,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+
+  res.json({ ok: true, analyses: analyses.map(toAnalysisResponse) });
+});
+
+app.get("/portfolios/:id/analyses", requireAuth, async (req, res) => {
+  const portfolio = await getOwnedPortfolioOrNull(req.user.sub, req.params.id);
+  if (!portfolio) return res.status(404).json({ error: "Portfolio not found" });
+
+  const analyses = await prisma.stockAnalysis.findMany({
+    where: {
+      userId: req.user.sub,
+      portfolioId: portfolio.id,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+
+  res.json({ ok: true, analyses: analyses.map(toAnalysisResponse) });
+});
+
 function computeSimpleStats(rows, days = 30) {
   const recent = rows.slice(-days);
   const first = recent[0];
@@ -476,9 +549,23 @@ function computeSimpleStats(rows, days = 30) {
 }
 
 app.get("/stocks/analyze", requireAuth, async (req, res) => {
-  const ticker = String(req.query.ticker || "").trim().toUpperCase();
-  if (!/^[A-Z.]{1,10}$/.test(ticker)) {
-    return res.status(400).json({ error: "Invalid ticker format" });
+  const parsed = analyzeQuerySchema.safeParse({
+    ticker: String(req.query.ticker || "").trim().toUpperCase(),
+    watchlistId: req.query.watchlistId ? String(req.query.watchlistId) : undefined,
+    portfolioId: req.query.portfolioId ? String(req.query.portfolioId) : undefined,
+  });
+  if (!parsed.success) return res.status(400).json({ error: "Invalid analyze request" });
+
+  const { ticker, watchlistId, portfolioId } = parsed.data;
+
+  if (watchlistId) {
+    const watchlist = await getOwnedWatchlistOrNull(req.user.sub, watchlistId);
+    if (!watchlist) return res.status(404).json({ error: "Watchlist not found" });
+  }
+
+  if (portfolioId) {
+    const portfolio = await getOwnedPortfolioOrNull(req.user.sub, portfolioId);
+    if (!portfolio) return res.status(404).json({ error: "Portfolio not found" });
   }
 
   const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
@@ -486,13 +573,15 @@ app.get("/stocks/analyze", requireAuth, async (req, res) => {
     where: {
       userId: req.user.sub,
       ticker,
+      ...(watchlistId ? { watchlistId } : { watchlistId: null }),
+      ...(portfolioId ? { portfolioId } : { portfolioId: null }),
       createdAt: { gte: twelveHoursAgo },
     },
     orderBy: { createdAt: "desc" },
   });
 
   if (cached) {
-    return res.json({ ok: true, cached: true, ticker, summary: cached.summary, data: cached.dataJson });
+    return res.json({ ok: true, ...toAnalysisResponse({ ...cached, cached: true }) });
   }
 
   const dbRowsDesc = await prisma.dailyPrice.findMany({
@@ -551,10 +640,13 @@ app.get("/stocks/analyze", requireAuth, async (req, res) => {
       ticker,
       summary,
       dataJson: prompt,
+      cached: false,
+      watchlistId: watchlistId || null,
+      portfolioId: portfolioId || null,
     },
   });
 
-  res.json({ ok: true, cached: false, ticker, summary: saved.summary, data: saved.dataJson });
+  res.json({ ok: true, ...toAnalysisResponse(saved) });
 });
 
 app.get("/health", (req, res) => res.send("ok"));

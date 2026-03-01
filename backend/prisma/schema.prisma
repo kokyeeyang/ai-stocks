@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -18,16 +17,21 @@ model User {
 }
 
 model StockAnalysis {
-  id        String   @id @default(cuid())
-  ticker    String
-  summary   String
-  dataJson  Json
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  ticker      String
+  summary     String
+  dataJson    Json
+  cached      Boolean  @default(false)
+  createdAt   DateTime @default(now())
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  watchlistId String?
+  portfolioId String?
 
   @@index([userId, ticker, createdAt])
+  @@index([watchlistId, createdAt])
+  @@index([portfolioId, createdAt])
 }
 
 model Ticker {
