@@ -1,20 +1,44 @@
 "use client";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
-import { useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_BASE!;
+const API = process.env.NEXT_PUBLIC_API_BASE;
 
 export default function Login() {
+  const router = useRouter();
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (!API) {
+      setCheckingAuth(false);
+      return;
+    }
+
+    fetch(`${API}/me`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then(() => router.replace("/dashboard"))
+      .catch(() => setCheckingAuth(false));
+  }, [router]);
+
+  if (checkingAuth) {
+    return null;
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMsg("");
-    setLoading(true);
 
+    if (!API) {
+      setMsg("App configuration error. Please try again later.");
+      return;
+    }
+
+    setLoading(true);
     try {
       const resp = await fetch(`${API}/auth/login`, {
         method: "POST",
@@ -29,7 +53,7 @@ export default function Login() {
         return;
       }
 
-      window.location.href = "/dashboard";
+      router.push("/dashboard");
     } catch {
       setMsg("Network error. Please try again.");
     } finally {
@@ -50,8 +74,11 @@ export default function Login() {
           <div className="card card-pad">
             <form onSubmit={onSubmit} className="space-y-4">
               <div>
-                <label className="mb-2 block text-sm muted">Email</label>
+                <label className="mb-2 block text-sm muted" htmlFor="email">
+                  Email
+                </label>
                 <input
+                  id="email"
                   className="input"
                   placeholder="you@email.com"
                   value={email}
@@ -63,10 +90,13 @@ export default function Login() {
               </div>
 
               <div>
-                <label className="mb-2 block text-sm muted">Password</label>
+                <label className="mb-2 block text-sm muted" htmlFor="password">
+                  Password
+                </label>
                 <input
+                  id="password"
                   className="input"
-                  placeholder="••••••••"
+                  placeholder="********"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete="current-password"
@@ -86,10 +116,10 @@ export default function Login() {
               </button>
 
               <p className="text-sm muted">
-                Don’t have an account?{" "}
-                <a className="text-white hover:underline" href="/signup">
+                Don't have an account?{" "}
+                <Link className="text-white hover:underline" href="/signup">
                   Create an account
-                </a>
+                </Link>
               </p>
             </form>
           </div>

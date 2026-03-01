@@ -8,11 +8,13 @@ datasource db {
 }
 
 model User {
-  id        String          @id @default(cuid())
-  email     String          @unique
-  password  String
-  createdAt DateTime        @default(now())
-  analyses  StockAnalysis[]
+  id          String              @id @default(cuid())
+  email       String              @unique
+  password    String
+  createdAt   DateTime            @default(now())
+  analyses    StockAnalysis[]
+  portfolios  Portfolio[]
+  watchlists  Watchlist[]
 }
 
 model StockAnalysis {
@@ -53,4 +55,61 @@ model DailyPrice {
 
   @@unique([symbol, date])
   @@index([symbol, date])
+}
+
+model Portfolio {
+  id        String             @id @default(cuid())
+  name      String
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  holdings  PortfolioHolding[]
+
+  @@index([userId, createdAt])
+}
+
+model PortfolioHolding {
+  id          String     @id @default(cuid())
+  symbol      String
+  quantity    Float
+  averageCost Float?
+  notes       String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  portfolioId String
+  portfolio   Portfolio  @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, symbol])
+  @@index([symbol])
+}
+
+model Watchlist {
+  id        String          @id @default(cuid())
+  name      String
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  items     WatchlistItem[]
+
+  @@index([userId, createdAt])
+}
+
+model WatchlistItem {
+  id          String     @id @default(cuid())
+  symbol      String
+  notes       String?
+  createdAt   DateTime   @default(now())
+
+  watchlistId String
+  watchlist   Watchlist  @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+
+  @@unique([watchlistId, symbol])
+  @@index([symbol])
 }
