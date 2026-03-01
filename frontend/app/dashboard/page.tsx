@@ -379,7 +379,7 @@ export default function Dashboard() {
                     />
                   </div>
 
-                  <button onClick={analyze} className="btn-primary w-full" disabled={loading} type="button">
+                  <button onClick={() => analyze()} className="btn-primary w-full" disabled={loading} type="button">
                     {loading ? "Analyzing..." : "Analyze"}
                   </button>
 
