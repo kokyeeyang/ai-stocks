@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import pg from "pg";
+import { normalizeTicker, toStooqSymbol } from "../src/tickers.js";
 
 const connectionString = process.env.DATABASE_URL;
 const pool = new pg.Pool({ connectionString });
@@ -13,7 +14,8 @@ const prisma = new PrismaClient({ adapter });
  * Example: https://stooq.com/q/d/l/?s=aapl.us&i=d
  */
 async function fetchStooqDaily(symbol) {
-  const stooqSymbol = `${symbol.toLowerCase()}.us`;
+  const stooqSymbol = toStooqSymbol(symbol);
+  if (!stooqSymbol) throw new Error(`Unsupported symbol: ${symbol}`);
   const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol)}&i=d`;
 
   const resp = await fetch(url);
@@ -53,8 +55,8 @@ async function fetchStooqDaily(symbol) {
  * Upsert ticker and its prices. Uses @@unique(symbol,date) for idempotency.
  */
 async function upsertTickerAndPrices(symbol, rows, lookbackDays = 365) {
-  const SYM = symbol.toUpperCase().trim();
-  if (!/^[A-Z.]{1,10}$/.test(SYM)) throw new Error(`Bad symbol: ${symbol}`);
+  const SYM = normalizeTicker(symbol);
+  if (!SYM) throw new Error(`Bad symbol: ${symbol}`);
 
   await prisma.ticker.upsert({
     where: { symbol: SYM },
@@ -85,15 +87,19 @@ async function upsertTickerAndPrices(symbol, rows, lookbackDays = 365) {
   return { inserted: recent.length };
 }
 
+function parseCliTickers(argv) {
+  return argv
+    .map((value) => normalizeTicker(value))
+    .filter(Boolean);
+}
+
 async function main() {
-  // Option A: CLI tickers e.g. `node scripts/ingest-prices.js AAPL MSFT`
-  // Option B: Use DB tickers (recommended later)
-  const cliTickers = process.argv.slice(2).map((s) => s.toUpperCase());
+  const cliTickers = parseCliTickers(process.argv.slice(2));
 
   let tickers = cliTickers;
   if (tickers.length === 0) {
     // Default set if none supplied
-    tickers = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL"];
+    tickers = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "AVGO", "VGT", "IVV"];
   }
 
   console.log(`[ingest] tickers=${tickers.join(", ")}`);

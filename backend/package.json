@@ -4,7 +4,11 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "prisma": "prisma"
+    "prisma": "prisma",
+    "portfolio:export-holdings": "node scripts/migrate-portfolio-holdings.js export",
+    "portfolio:import-holdings": "node scripts/migrate-portfolio-holdings.js import",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.4.2",
@@ -20,6 +24,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "prisma": "^7.4.2"
+    "prisma": "^7.4.2",
+    "supertest": "^7.1.4",
+    "vitest": "^3.2.4"
   }
 }

@@ -33,26 +33,38 @@ type Watchlist = {
   items: WatchlistItem[];
 };
 
-type PortfolioHolding = {
-  id: string;
+type PortfolioPosition = {
   symbol: string;
   quantity: number;
-  averageCost: number | null;
-  notes: string | null;
+  averageCost: number;
   latestClose: number | null;
   marketValue: number | null;
-  costBasis: number | null;
+  costBasis: number;
   unrealizedPnL: number | null;
+  buyTransactions: number;
+  sellTransactions: number;
+};
+
+type PortfolioTransaction = {
+  id: string;
+  type: "BUY" | "SELL";
+  symbol: string;
+  quantity: number;
+  price: number;
+  notes: string | null;
+  executedAt: string;
 };
 
 type Portfolio = {
   id: string;
   name: string;
-  holdings: PortfolioHolding[];
+  positions: PortfolioPosition[];
+  transactions: PortfolioTransaction[];
   summary?: {
     totalMarketValue: number;
     totalCostBasis: number;
     unrealizedPnL: number;
+    realizedPnL: number;
   };
 };
 
@@ -79,8 +91,8 @@ export default function Dashboard() {
   const [newWatchlistName, setNewWatchlistName] = useState("");
   const [watchlistTickerInputs, setWatchlistTickerInputs] = useState<Record<string, string>>({});
   const [newPortfolioName, setNewPortfolioName] = useState("");
-  const [portfolioHoldingInputs, setPortfolioHoldingInputs] = useState<
-    Record<string, { symbol: string; quantity: string; averageCost: string }>
+  const [portfolioTransactionInputs, setPortfolioTransactionInputs] = useState<
+    Record<string, { symbol: string; quantity: string; price: string; type: "BUY" | "SELL" }>
   >({});
 
   useEffect(() => {
@@ -272,57 +284,63 @@ export default function Dashboard() {
     await loadWorkspace();
   }
 
-  async function addHolding(portfolioId: string, e: FormEvent) {
+  async function addTransaction(portfolioId: string, e: FormEvent) {
     e.preventDefault();
     if (!API) return;
 
-    const form = portfolioHoldingInputs[portfolioId] || { symbol: "", quantity: "", averageCost: "" };
+    const form = portfolioTransactionInputs[portfolioId] || {
+      symbol: "",
+      quantity: "",
+      price: "",
+      type: "BUY" as const,
+    };
     const symbol = form.symbol.trim().toUpperCase();
     const quantity = Number(form.quantity);
-    const averageCost = form.averageCost ? Number(form.averageCost) : undefined;
+    const price = Number(form.price);
 
-    if (!symbol || !Number.isFinite(quantity) || quantity <= 0) {
-      setWorkspaceMsg("Enter a valid symbol and quantity.");
+    if (!symbol || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || price <= 0) {
+      setWorkspaceMsg("Enter a valid symbol, quantity, and price.");
       return;
     }
 
     setWorkspaceMsg("");
-    const resp = await fetch(`${API}/portfolios/${portfolioId}/holdings`, {
+    const resp = await fetch(`${API}/portfolios/${portfolioId}/transactions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({
         symbol,
+        type: form.type,
         quantity,
-        averageCost: averageCost !== undefined && Number.isFinite(averageCost) ? averageCost : undefined,
+        price,
       }),
     });
 
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      setWorkspaceMsg(data?.error || "Failed to add holding.");
+      setWorkspaceMsg(data?.error || "Failed to add transaction.");
       return;
     }
 
-    setPortfolioHoldingInputs((current) => ({
+    setPortfolioTransactionInputs((current) => ({
       ...current,
-      [portfolioId]: { symbol: "", quantity: "", averageCost: "" },
+      [portfolioId]: { symbol: "", quantity: "", price: "", type: "BUY" },
     }));
     await loadWorkspace();
   }
 
-  async function removeHolding(portfolioId: string, symbol: string) {
+  async function removeTransaction(portfolioId: string, transactionId: string) {
     if (!API) return;
 
     setWorkspaceMsg("");
-    const resp = await fetch(`${API}/portfolios/${portfolioId}/holdings/${encodeURIComponent(symbol)}`, {
+    const resp = await fetch(`${API}/portfolios/${portfolioId}/transactions/${encodeURIComponent(transactionId)}`, {
       method: "DELETE",
       credentials: "include",
     });
 
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
-      setWorkspaceMsg(data?.error || "Failed to remove holding.");
+      setWorkspaceMsg(data?.error || "Failed to remove transaction.");
       return;
     }
 
@@ -396,7 +414,7 @@ export default function Dashboard() {
                   )}
 
                   <div>
-                    <p className="mb-2 text-sm muted">Popular tickers</p>
+                    <p className="mb-2 text-sm muted">Example tickers</p>
                     <div className="flex flex-wrap gap-2">
                       {["AAPL", "MSFT", "NVDA", "TSLA", "AMZN"].map((value) => (
                         <button
@@ -598,9 +616,11 @@ export default function Dashboard() {
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div>
                             <p className="font-medium">{portfolio.name}</p>
-                            <p className="text-xs muted">{portfolio.holdings.length} holdings</p>
+                            <p className="text-xs muted">
+                              {portfolio.positions.length} positions | {portfolio.transactions.length} transactions
+                            </p>
                           </div>
-                          <div className="grid grid-cols-3 gap-3 text-right text-xs muted">
+                          <div className="grid grid-cols-2 gap-3 text-right text-xs muted sm:grid-cols-4">
                             <div>
                               <p>Value</p>
                               <p className="text-sm text-white">{formatMoney(portfolio.summary?.totalMarketValue)}</p>
@@ -610,23 +630,46 @@ export default function Dashboard() {
                               <p className="text-sm text-white">{formatMoney(portfolio.summary?.totalCostBasis)}</p>
                             </div>
                             <div>
-                              <p>P/L</p>
+                              <p>Unrealized</p>
                               <p className="text-sm text-white">{formatMoney(portfolio.summary?.unrealizedPnL)}</p>
+                            </div>
+                            <div>
+                              <p>Realized</p>
+                              <p className="text-sm text-white">{formatMoney(portfolio.summary?.realizedPnL)}</p>
                             </div>
                           </div>
                         </div>
 
-                        <form className="mt-4 grid gap-2 md:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={(e) => addHolding(portfolio.id, e)}>
+                        <form className="mt-4 grid gap-2 md:grid-cols-[110px_1fr_1fr_1fr_auto]" onSubmit={(e) => addTransaction(portfolio.id, e)}>
+                          <select
+                            className="input"
+                            value={portfolioTransactionInputs[portfolio.id]?.type || "BUY"}
+                            onChange={(e) =>
+                              setPortfolioTransactionInputs((current) => ({
+                                ...current,
+                                [portfolio.id]: {
+                                  symbol: current[portfolio.id]?.symbol || "",
+                                  quantity: current[portfolio.id]?.quantity || "",
+                                  price: current[portfolio.id]?.price || "",
+                                  type: e.target.value as "BUY" | "SELL",
+                                },
+                              }))
+                            }
+                          >
+                            <option value="BUY">Buy</option>
+                            <option value="SELL">Sell</option>
+                          </select>
                           <input
                             className="input"
-                            value={portfolioHoldingInputs[portfolio.id]?.symbol || ""}
+                            value={portfolioTransactionInputs[portfolio.id]?.symbol || ""}
                             onChange={(e) =>
-                              setPortfolioHoldingInputs((current) => ({
+                              setPortfolioTransactionInputs((current) => ({
                                 ...current,
                                 [portfolio.id]: {
                                   symbol: e.target.value.toUpperCase(),
                                   quantity: current[portfolio.id]?.quantity || "",
-                                  averageCost: current[portfolio.id]?.averageCost || "",
+                                  price: current[portfolio.id]?.price || "",
+                                  type: current[portfolio.id]?.type || "BUY",
                                 },
                               }))
                             }
@@ -634,14 +677,15 @@ export default function Dashboard() {
                           />
                           <input
                             className="input"
-                            value={portfolioHoldingInputs[portfolio.id]?.quantity || ""}
+                            value={portfolioTransactionInputs[portfolio.id]?.quantity || ""}
                             onChange={(e) =>
-                              setPortfolioHoldingInputs((current) => ({
+                              setPortfolioTransactionInputs((current) => ({
                                 ...current,
                                 [portfolio.id]: {
                                   symbol: current[portfolio.id]?.symbol || "",
                                   quantity: e.target.value,
-                                  averageCost: current[portfolio.id]?.averageCost || "",
+                                  price: current[portfolio.id]?.price || "",
+                                  type: current[portfolio.id]?.type || "BUY",
                                 },
                               }))
                             }
@@ -650,73 +694,103 @@ export default function Dashboard() {
                           />
                           <input
                             className="input"
-                            value={portfolioHoldingInputs[portfolio.id]?.averageCost || ""}
+                            value={portfolioTransactionInputs[portfolio.id]?.price || ""}
                             onChange={(e) =>
-                              setPortfolioHoldingInputs((current) => ({
+                              setPortfolioTransactionInputs((current) => ({
                                 ...current,
                                 [portfolio.id]: {
                                   symbol: current[portfolio.id]?.symbol || "",
                                   quantity: current[portfolio.id]?.quantity || "",
-                                  averageCost: e.target.value,
+                                  price: e.target.value,
+                                  type: current[portfolio.id]?.type || "BUY",
                                 },
                               }))
                             }
-                            placeholder="Avg cost"
+                            placeholder="Price"
                             inputMode="decimal"
                           />
                           <button className="btn-ghost" type="submit">
-                            Add
+                            Add txn
                           </button>
                         </form>
 
                         <div className="mt-4 space-y-3">
-                          {portfolio.holdings.length === 0 ? (
+                          {portfolio.positions.length === 0 ? (
                             <div className="rounded-2xl border border-dashed p-4 text-sm muted">
-                              No holdings yet.
+                              No positions yet.
                             </div>
                           ) : (
-                            portfolio.holdings.map((holding) => (
-                              <div key={holding.id} className="rounded-2xl border bg-white/5 p-4">
+                            portfolio.positions.map((position) => (
+                              <div key={position.symbol} className="rounded-2xl border bg-white/5 p-4">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                   <div>
                                     <button
                                       type="button"
                                       className="font-medium hover:underline"
-                                      onClick={() => analyze({ ticker: holding.symbol, portfolioId: portfolio.id })}
+                                      onClick={() => analyze({ ticker: position.symbol, portfolioId: portfolio.id })}
                                     >
-                                      {holding.symbol}
+                                      {position.symbol}
                                     </button>
                                     <p className="text-xs muted">
-                                      {holding.quantity} shares at {formatMoney(holding.averageCost)}
+                                      {position.quantity} shares at {formatMoney(position.averageCost)}
+                                      {` | ${position.buyTransactions} buys / ${position.sellTransactions} sells`}
                                     </p>
                                   </div>
-                                  <button
-                                    type="button"
-                                    className="text-sm muted hover:text-white"
-                                    onClick={() => removeHolding(portfolio.id, holding.symbol)}
-                                  >
-                                    Remove
-                                  </button>
                                 </div>
 
                                 <div className="mt-3 grid gap-3 sm:grid-cols-4 text-xs muted">
                                   <div>
                                     <p>Last price</p>
-                                    <p className="text-sm text-white">{formatMoney(holding.latestClose)}</p>
+                                    <p className="text-sm text-white">{formatMoney(position.latestClose)}</p>
                                   </div>
                                   <div>
                                     <p>Value</p>
-                                    <p className="text-sm text-white">{formatMoney(holding.marketValue)}</p>
+                                    <p className="text-sm text-white">{formatMoney(position.marketValue)}</p>
                                   </div>
                                   <div>
                                     <p>Cost basis</p>
-                                    <p className="text-sm text-white">{formatMoney(holding.costBasis)}</p>
+                                    <p className="text-sm text-white">{formatMoney(position.costBasis)}</p>
                                   </div>
                                   <div>
                                     <p>Unrealized P/L</p>
-                                    <p className="text-sm text-white">{formatMoney(holding.unrealizedPnL)}</p>
+                                    <p className="text-sm text-white">{formatMoney(position.unrealizedPnL)}</p>
                                   </div>
                                 </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+
+                        <div className="mt-4 space-y-2">
+                          <p className="text-sm muted">Recent transactions</p>
+                          {portfolio.transactions.length === 0 ? (
+                            <div className="rounded-2xl border border-dashed p-4 text-sm muted">
+                              No transactions yet.
+                            </div>
+                          ) : (
+                            portfolio.transactions.slice(0, 8).map((transaction) => (
+                              <div key={transaction.id} className="rounded-2xl border bg-white/5 p-4">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div>
+                                    <p className="font-medium">
+                                      {transaction.type} {transaction.symbol}
+                                    </p>
+                                    <p className="text-xs muted">
+                                      {transaction.quantity} shares at {formatMoney(transaction.price)} |{" "}
+                                      {new Date(transaction.executedAt).toLocaleDateString()}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="text-sm muted hover:text-white"
+                                    onClick={() => removeTransaction(portfolio.id, transaction.id)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                                {transaction.notes && (
+                                  <div className="mt-2 text-xs muted">{transaction.notes}</div>
+                                )}
                               </div>
                             ))
                           )}

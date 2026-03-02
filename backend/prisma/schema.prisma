@@ -70,25 +70,31 @@ model Portfolio {
   userId    String
   user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  holdings  PortfolioHolding[]
+  transactions PortfolioTransaction[]
 
   @@index([userId, createdAt])
 }
 
-model PortfolioHolding {
+model PortfolioTransaction {
   id          String     @id @default(cuid())
+  type        PortfolioTransactionType @default(BUY)
   symbol      String
   quantity    Float
-  averageCost Float?
+  price       Float
   notes       String?
+  executedAt  DateTime   @default(now())
   createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
 
   portfolioId String
   portfolio   Portfolio  @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
 
-  @@unique([portfolioId, symbol])
+  @@index([portfolioId, executedAt])
   @@index([symbol])
+}
+
+enum PortfolioTransactionType {
+  BUY
+  SELL
 }
 
 model Watchlist {
