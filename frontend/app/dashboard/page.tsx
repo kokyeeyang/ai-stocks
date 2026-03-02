@@ -16,6 +16,33 @@ type AnalysisResult = {
   ticker: string;
   summary: string;
   data: unknown;
+  indicators?: {
+    latestClose: number | null;
+    sma20: number | null;
+    sma50: number | null;
+    rsi14: number | null;
+    macd: number | null;
+    macdSignal: number | null;
+    trailing52WeekHigh: number | null;
+    trailing52WeekLow: number | null;
+    averageVolume20: number | null;
+    latestVolume: number | null;
+    returns: {
+      day1: number | null;
+      week1: number | null;
+      month1: number | null;
+    };
+    labels: {
+      trend: string;
+      momentum: string;
+      volatility: string;
+    };
+  } | null;
+  chartSeries?: Array<{
+    date: string;
+    close: number;
+    volume: number;
+  }>;
   news?: {
     articles: Array<{
       title: string;
@@ -47,6 +74,13 @@ type WatchlistItem = {
   id: string;
   symbol: string;
   notes: string | null;
+  latestClose?: number | null;
+  latestAnalysis?: {
+    id: string;
+    createdAt: string;
+    summary: string;
+    cached: boolean;
+  } | null;
 };
 
 type Watchlist = {
@@ -91,6 +125,23 @@ type Portfolio = {
 };
 
 type DashboardPanel = "portfolios" | "analyses" | "transactions" | null;
+type PaginationState = {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+};
+type PanelTransaction = {
+  id: string;
+  type: "BUY" | "SELL";
+  symbol: string;
+  quantity: number;
+  price: number;
+  notes: string | null;
+  executedAt: string;
+  portfolioId: string;
+  portfolioName: string;
+};
 
 function formatMoney(value: number | null | undefined) {
   if (value === null || value === undefined) return "--";
@@ -100,6 +151,32 @@ function formatMoney(value: number | null | undefined) {
 function formatSentimentLabel(value: string | null | undefined) {
   if (!value) return "No signal";
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatCompactNumber(value: number | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+function formatSignedPercent(value: number | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function buildLinePath(values: number[], width: number, height: number) {
+  if (!values.length) return "";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+
+  return values
+    .map((value, index) => {
+      const x = (index / Math.max(1, values.length - 1)) * width;
+      const y = height - ((value - min) / range) * height;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
 }
 
 export default function Dashboard() {
@@ -116,6 +193,22 @@ export default function Dashboard() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceMsg, setWorkspaceMsg] = useState("");
   const [recentAnalyses, setRecentAnalyses] = useState<AnalysisResult[]>([]);
+  const [recentTransactions, setRecentTransactions] = useState<PanelTransaction[]>([]);
+  const [recentAnalysesTotal, setRecentAnalysesTotal] = useState(0);
+  const [recentTransactionsTotal, setRecentTransactionsTotal] = useState(0);
+  const [analysisPanelItems, setAnalysisPanelItems] = useState<AnalysisResult[]>([]);
+  const [transactionPanelItems, setTransactionPanelItems] = useState<PanelTransaction[]>([]);
+  const [analysisPagination, setAnalysisPagination] = useState<PaginationState>({ page: 1, limit: 6, total: 0, totalPages: 1 });
+  const [transactionPagination, setTransactionPagination] = useState<PaginationState>({ page: 1, limit: 8, total: 0, totalPages: 1 });
+  const [analysisSearch, setAnalysisSearch] = useState("");
+  const [analysisSearchDraft, setAnalysisSearchDraft] = useState("");
+  const [analysisContextFilter, setAnalysisContextFilter] = useState("all");
+  const [transactionSearch, setTransactionSearch] = useState("");
+  const [transactionSearchDraft, setTransactionSearchDraft] = useState("");
+  const [transactionTypeFilter, setTransactionTypeFilter] = useState("all");
+  const [transactionPortfolioFilter, setTransactionPortfolioFilter] = useState("all");
+  const [analysesLoading, setAnalysesLoading] = useState(false);
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
   const [activePanel, setActivePanel] = useState<DashboardPanel>(null);
 
   const [newWatchlistName, setNewWatchlistName] = useState("");
@@ -146,6 +239,18 @@ export default function Dashboard() {
     void loadWorkspace();
   }, [checkingAuth, me]);
 
+  useEffect(() => {
+    if (activePanel === "analyses") {
+      void loadAnalysesPage(analysisPagination.page);
+    }
+  }, [activePanel, analysisPagination.page, analysisSearch, analysisContextFilter]);
+
+  useEffect(() => {
+    if (activePanel === "transactions") {
+      void loadTransactionsPage(transactionPagination.page);
+    }
+  }, [activePanel, transactionPagination.page, transactionSearch, transactionTypeFilter, transactionPortfolioFilter]);
+
   async function loadWorkspace() {
     if (!API) return;
 
@@ -153,27 +258,87 @@ export default function Dashboard() {
     setWorkspaceMsg("");
 
     try {
-      const [watchlistsResp, portfoliosResp, analysesResp] = await Promise.all([
+      const [watchlistsResp, portfoliosResp, analysesResp, transactionsResp] = await Promise.all([
         fetch(`${API}/watchlists`, { credentials: "include" }),
         fetch(`${API}/portfolios`, { credentials: "include" }),
-        fetch(`${API}/analyses?limit=12`, { credentials: "include" }),
+        fetch(`${API}/analyses?limit=6&page=1`, { credentials: "include" }),
+        fetch(`${API}/transactions?limit=8&page=1`, { credentials: "include" }),
       ]);
 
-      if (!watchlistsResp.ok || !portfoliosResp.ok || !analysesResp.ok) {
+      if (!watchlistsResp.ok || !portfoliosResp.ok || !analysesResp.ok || !transactionsResp.ok) {
         throw new Error("Failed to load workspace");
       }
 
       const watchlistsData = await watchlistsResp.json();
       const portfoliosData = await portfoliosResp.json();
       const analysesData = await analysesResp.json();
+      const transactionsData = await transactionsResp.json();
 
       setWatchlists(watchlistsData.watchlists || []);
       setPortfolios(portfoliosData.portfolios || []);
       setRecentAnalyses(analysesData.analyses || []);
+      setRecentTransactions(transactionsData.transactions || []);
+      setRecentAnalysesTotal(analysesData.pagination?.total || 0);
+      setRecentTransactionsTotal(transactionsData.pagination?.total || 0);
+      setAnalysisPagination(analysesData.pagination || { page: 1, limit: 6, total: 0, totalPages: 1 });
+      setTransactionPagination(transactionsData.pagination || { page: 1, limit: 8, total: 0, totalPages: 1 });
     } catch {
       setWorkspaceMsg("Failed to load portfolios and watchlists.");
     } finally {
       setWorkspaceLoading(false);
+    }
+  }
+
+  async function loadAnalysesPage(page = 1) {
+    if (!API) return;
+    setAnalysesLoading(true);
+
+    try {
+      const query = new URLSearchParams({
+        page: String(page),
+        limit: "6",
+      });
+      if (analysisSearch) query.set("q", analysisSearch);
+      if (analysisContextFilter !== "all") query.set("context", analysisContextFilter);
+
+      const resp = await fetch(`${API}/analyses?${query.toString()}`, { credentials: "include" });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setWorkspaceMsg(data?.error || "Failed to load analyses.");
+        return;
+      }
+
+      setAnalysisPanelItems(data.analyses || []);
+      setAnalysisPagination(data.pagination || { page, limit: 6, total: 0, totalPages: 1 });
+    } finally {
+      setAnalysesLoading(false);
+    }
+  }
+
+  async function loadTransactionsPage(page = 1) {
+    if (!API) return;
+    setTransactionsLoading(true);
+
+    try {
+      const query = new URLSearchParams({
+        page: String(page),
+        limit: "8",
+      });
+      if (transactionSearch) query.set("q", transactionSearch);
+      if (transactionTypeFilter !== "all") query.set("type", transactionTypeFilter);
+      if (transactionPortfolioFilter !== "all") query.set("portfolioId", transactionPortfolioFilter);
+
+      const resp = await fetch(`${API}/transactions?${query.toString()}`, { credentials: "include" });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setWorkspaceMsg(data?.error || "Failed to load transactions.");
+        return;
+      }
+
+      setTransactionPanelItems(data.transactions || []);
+      setTransactionPagination(data.pagination || { page, limit: 8, total: 0, totalPages: 1 });
+    } finally {
+      setTransactionsLoading(false);
     }
   }
 
@@ -212,6 +377,9 @@ export default function Dashboard() {
       setResult(data);
       setMsg(data.cached ? "Loaded cached analysis (<=12h old)." : "Fresh analysis generated.");
       await loadWorkspace();
+      if (activePanel === "analyses") {
+        await loadAnalysesPage(analysisPagination.page);
+      }
     } catch {
       setMsg("Network error. Please try again.");
     } finally {
@@ -272,6 +440,21 @@ export default function Dashboard() {
 
     setWatchlistTickerInputs((current) => ({ ...current, [watchlistId]: "" }));
     await loadWorkspace();
+  }
+
+  async function analyzeWatchlist(watchlist: Watchlist) {
+    if (!watchlist.items.length) {
+      setWorkspaceMsg("Add at least one ticker before analyzing a watchlist.");
+      return;
+    }
+
+    setWorkspaceMsg("");
+    for (const item of watchlist.items) {
+      // Sequential keeps the UI/state predictable and avoids a burst of API requests.
+      // The latest item analyzed will remain in the main result panel.
+      // eslint-disable-next-line no-await-in-loop
+      await analyze({ ticker: item.symbol, watchlistId: watchlist.id });
+    }
   }
 
   async function removeWatchlistItem(watchlistId: string, symbol: string) {
@@ -357,6 +540,9 @@ export default function Dashboard() {
       [portfolioId]: { symbol: "", quantity: "", price: "", type: "BUY" },
     }));
     await loadWorkspace();
+    if (activePanel === "transactions") {
+      await loadTransactionsPage(transactionPagination.page);
+    }
   }
 
   async function removeTransaction(portfolioId: string, transactionId: string) {
@@ -375,28 +561,14 @@ export default function Dashboard() {
     }
 
     await loadWorkspace();
+    if (activePanel === "transactions") {
+      await loadTransactionsPage(transactionPagination.page);
+    }
   }
 
   if (checkingAuth) {
     return null;
   }
-
-  const lastAnalysisByTicker = new Map<string, AnalysisResult>();
-  for (const analysis of recentAnalyses) {
-    if (!lastAnalysisByTicker.has(analysis.ticker)) {
-      lastAnalysisByTicker.set(analysis.ticker, analysis);
-    }
-  }
-
-  const recentTransactions = portfolios
-    .flatMap((portfolio) =>
-      portfolio.transactions.map((transaction) => ({
-        ...transaction,
-        portfolioId: portfolio.id,
-        portfolioName: portfolio.name,
-      }))
-    )
-    .sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
 
   const portfolioTotals = portfolios.reduce(
     (totals, portfolio) => ({
@@ -406,6 +578,8 @@ export default function Dashboard() {
     }),
     { value: 0, unrealized: 0, realized: 0 }
   );
+  const chartValues = (result?.chartSeries || []).map((point) => point.close);
+  const chartPath = chartValues.length ? buildLinePath(chartValues, 560, 180) : "";
 
   return (
     <div className="page">
@@ -509,6 +683,14 @@ export default function Dashboard() {
                             <p className="font-medium">{watchlist.name}</p>
                             <p className="text-xs muted">{watchlist.items.length} saved tickers</p>
                           </div>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            onClick={() => analyzeWatchlist(watchlist)}
+                            disabled={loading || watchlist.items.length === 0}
+                          >
+                            Analyze all
+                          </button>
                         </div>
 
                         <form className="mt-3 flex gap-2" onSubmit={(e) => addWatchlistItem(watchlist.id, e)}>
@@ -528,31 +710,48 @@ export default function Dashboard() {
                           </button>
                         </form>
 
-                        <div className="mt-3 flex flex-wrap gap-2">
+                        <div className="mt-3 space-y-3">
                           {watchlist.items.length === 0 ? (
                             <span className="text-xs muted">No tickers yet.</span>
                           ) : (
                             watchlist.items.map((item) => (
-                              <div key={item.id} className="badge flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  className="hover:underline"
-                                  onClick={() => analyze({ ticker: item.symbol, watchlistId: watchlist.id })}
-                                >
-                                  {item.symbol}
-                                </button>
-                                <span className="text-[10px] muted">
-                                  {lastAnalysisByTicker.get(item.symbol)?.createdAt
-                                    ? new Date(lastAnalysisByTicker.get(item.symbol)!.createdAt).toLocaleDateString()
-                                    : "new"}
-                                </span>
-                                <button
-                                  type="button"
-                                  className="text-xs muted hover:text-white"
-                                  onClick={() => removeWatchlistItem(watchlist.id, item.symbol)}
-                                >
-                                  x
-                                </button>
+                              <div key={item.id} className="rounded-2xl border bg-white/5 p-3">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <button
+                                      type="button"
+                                      className="font-medium hover:underline"
+                                      onClick={() => analyze({ ticker: item.symbol, watchlistId: watchlist.id })}
+                                    >
+                                      {item.symbol}
+                                    </button>
+                                    <div className="mt-1 flex flex-wrap gap-2 text-xs muted">
+                                      <span>Last price {formatMoney(item.latestClose)}</span>
+                                      <span>
+                                        Last analysis{" "}
+                                        {item.latestAnalysis?.createdAt
+                                          ? new Date(item.latestAnalysis.createdAt).toLocaleDateString()
+                                          : "never"}
+                                      </span>
+                                      <span>
+                                        {item.latestAnalysis?.cached ? "Cached" : item.latestAnalysis ? "Fresh" : "Unanalyzed"}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="text-xs muted hover:text-white"
+                                    onClick={() => removeWatchlistItem(watchlist.id, item.symbol)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+
+                                {item.latestAnalysis?.summary && (
+                                  <p className="mt-3 line-clamp-2 text-xs muted">
+                                    {item.latestAnalysis.summary}
+                                  </p>
+                                )}
                               </div>
                             ))
                           )}
@@ -594,6 +793,125 @@ export default function Dashboard() {
                     </details>
                   </div>
                 )}
+              </div>
+
+              <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+                <div className="card card-pad">
+                  <h2 className="h2">Price chart for {result.ticker}</h2>
+                  <p className="mt-1 text-sm muted">Last 60 trading sessions with closing-price trend.</p>
+
+                  {!result?.chartSeries?.length ? (
+                    <div className="mt-6 rounded-2xl border border-dashed p-4 text-sm muted">
+                      Run an analysis to load chart data.
+                    </div>
+                  ) : (
+                    <div className="mt-6 space-y-4">
+                      <div className="rounded-2xl border bg-black/10 p-4">
+                        <svg viewBox="0 0 560 180" className="h-48 w-full" preserveAspectRatio="none">
+                          <defs>
+                            <linearGradient id="priceLineFill" x1="0" x2="0" y1="0" y2="1">
+                              <stop offset="0%" stopColor="rgba(var(--accent),0.4)" />
+                              <stop offset="100%" stopColor="rgba(var(--accent),0.02)" />
+                            </linearGradient>
+                          </defs>
+                          <path d={`${chartPath} L 560 180 L 0 180 Z`} fill="url(#priceLineFill)" />
+                          <path
+                            d={chartPath}
+                            fill="none"
+                            stroke="rgb(var(--accent))"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">Start</p>
+                          <p className="mt-1 text-sm text-white">{result.chartSeries[0]?.date || "--"}</p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">End</p>
+                          <p className="mt-1 text-sm text-white">{result.chartSeries[result.chartSeries.length - 1]?.date || "--"}</p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">Latest close</p>
+                          <p className="mt-1 text-sm text-white">{formatMoney(result.indicators?.latestClose)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="card card-pad">
+                  <h2 className="h2">Market signals</h2>
+                  <p className="mt-1 text-sm muted">Technical indicators that explain the generated analysis.</p>
+
+                  {!result?.indicators ? (
+                    <div className="mt-6 rounded-2xl border border-dashed p-4 text-sm muted">
+                      Run an analysis to load technical indicators.
+                    </div>
+                  ) : (
+                    <div className="mt-6 space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">Trend</p>
+                          <p className="mt-1 text-sm text-white">{formatSentimentLabel(result.indicators.labels.trend)}</p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">Momentum</p>
+                          <p className="mt-1 text-sm text-white">{formatSentimentLabel(result.indicators.labels.momentum)}</p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">Volatility</p>
+                          <p className="mt-1 text-sm text-white">{formatSentimentLabel(result.indicators.labels.volatility)}</p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">RSI (14)</p>
+                          <p className="mt-1 text-sm text-white">
+                            {result.indicators.rsi14 !== null ? result.indicators.rsi14.toFixed(2) : "--"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">SMA 20 / 50</p>
+                          <p className="mt-1 text-sm text-white">
+                            {formatMoney(result.indicators.sma20)} / {formatMoney(result.indicators.sma50)}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">MACD / Signal</p>
+                          <p className="mt-1 text-sm text-white">
+                            {result.indicators.macd !== null ? result.indicators.macd.toFixed(3) : "--"} /{" "}
+                            {result.indicators.macdSignal !== null ? result.indicators.macdSignal.toFixed(3) : "--"}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">1D / 1W / 1M</p>
+                          <p className="mt-1 text-sm text-white">
+                            {formatSignedPercent(result.indicators.returns.day1)} / {formatSignedPercent(result.indicators.returns.week1)} / {formatSignedPercent(result.indicators.returns.month1)}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border bg-black/10 p-4">
+                          <p className="text-xs muted">Volume</p>
+                          <p className="mt-1 text-sm text-white">
+                            {formatCompactNumber(result.indicators.latestVolume)} vs {formatCompactNumber(result.indicators.averageVolume20)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border bg-black/10 p-4">
+                        <p className="text-xs muted">52-week range</p>
+                        <p className="mt-1 text-sm text-white">
+                          {formatMoney(result.indicators.trailing52WeekLow)} - {formatMoney(result.indicators.trailing52WeekHigh)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
             </div>
@@ -677,20 +995,34 @@ export default function Dashboard() {
 
                   <div className="rounded-2xl border bg-black/10 p-4">
                     <p className="text-xs muted">Recent analyses</p>
-                    <p className="mt-1 text-sm text-white">{recentAnalyses.length}</p>
+                    <p className="mt-1 text-sm text-white">{recentAnalysesTotal}</p>
                     <p className="mt-2 text-xs muted">
                       Latest {recentAnalyses[0] ? new Date(recentAnalyses[0].createdAt).toLocaleString() : "none yet"}
                     </p>
-                    <button type="button" className="btn-ghost mt-4 w-full" onClick={() => setActivePanel("analyses")}>
+                    <button
+                      type="button"
+                      className="btn-ghost mt-4 w-full"
+                      onClick={() => {
+                        setAnalysisPagination((current) => ({ ...current, page: 1 }));
+                        setActivePanel("analyses");
+                      }}
+                    >
                       Open analyses
                     </button>
                   </div>
 
                   <div className="rounded-2xl border bg-black/10 p-4">
                     <p className="text-xs muted">Recent transactions</p>
-                    <p className="mt-1 text-sm text-white">{recentTransactions.length}</p>
+                    <p className="mt-1 text-sm text-white">{recentTransactionsTotal}</p>
                     <p className="mt-2 text-xs muted">Realized {formatMoney(portfolioTotals.realized)}</p>
-                    <button type="button" className="btn-ghost mt-4 w-full" onClick={() => setActivePanel("transactions")}>
+                    <button
+                      type="button"
+                      className="btn-ghost mt-4 w-full"
+                      onClick={() => {
+                        setTransactionPagination((current) => ({ ...current, page: 1 }));
+                        setActivePanel("transactions");
+                      }}
+                    >
                       Open transactions
                     </button>
                   </div>
@@ -905,10 +1237,44 @@ export default function Dashboard() {
 
             {activePanel === "analyses" && (
               <div className="mt-6 space-y-3">
-                {recentAnalyses.length === 0 ? (
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto]">
+                  <input
+                    className="input"
+                    placeholder="Search ticker or summary"
+                    value={analysisSearchDraft}
+                    onChange={(e) => setAnalysisSearchDraft(e.target.value)}
+                  />
+                  <select
+                    className="input"
+                    value={analysisContextFilter}
+                    onChange={(e) => {
+                      setAnalysisContextFilter(e.target.value);
+                      setAnalysisPagination((current) => ({ ...current, page: 1 }));
+                    }}
+                  >
+                    <option value="all">All contexts</option>
+                    <option value="direct">Direct</option>
+                    <option value="watchlist">Watchlist</option>
+                    <option value="portfolio">Portfolio</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => {
+                      setAnalysisSearch(analysisSearchDraft.trim());
+                      setAnalysisPagination((current) => ({ ...current, page: 1 }));
+                    }}
+                  >
+                    Search
+                  </button>
+                </div>
+
+                {analysesLoading ? (
+                  <div className="rounded-2xl border border-dashed p-4 text-sm muted">Loading analyses...</div>
+                ) : analysisPanelItems.length === 0 ? (
                   <div className="rounded-2xl border border-dashed p-4 text-sm muted">No saved analyses yet.</div>
                 ) : (
-                  recentAnalyses.map((analysis) => (
+                  analysisPanelItems.map((analysis) => (
                     <button
                       key={analysis.id}
                       type="button"
@@ -930,15 +1296,94 @@ export default function Dashboard() {
                     </button>
                   ))
                 )}
+
+                <div className="flex items-center justify-between gap-3 pt-2">
+                  <p className="text-xs muted">
+                    Page {analysisPagination.page} of {analysisPagination.totalPages}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      disabled={analysisPagination.page <= 1 || analysesLoading}
+                      onClick={() =>
+                        setAnalysisPagination((current) => ({ ...current, page: Math.max(1, current.page - 1) }))
+                      }
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      disabled={analysisPagination.page >= analysisPagination.totalPages || analysesLoading}
+                      onClick={() =>
+                        setAnalysisPagination((current) => ({
+                          ...current,
+                          page: Math.min(current.totalPages, current.page + 1),
+                        }))
+                      }
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
             {activePanel === "transactions" && (
               <div className="mt-6 space-y-3">
-                {recentTransactions.length === 0 ? (
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_180px_auto]">
+                  <input
+                    className="input"
+                    placeholder="Search symbol, notes, or portfolio"
+                    value={transactionSearchDraft}
+                    onChange={(e) => setTransactionSearchDraft(e.target.value)}
+                  />
+                  <select
+                    className="input"
+                    value={transactionTypeFilter}
+                    onChange={(e) => {
+                      setTransactionTypeFilter(e.target.value);
+                      setTransactionPagination((current) => ({ ...current, page: 1 }));
+                    }}
+                  >
+                    <option value="all">All types</option>
+                    <option value="BUY">Buy</option>
+                    <option value="SELL">Sell</option>
+                  </select>
+                  <select
+                    className="input"
+                    value={transactionPortfolioFilter}
+                    onChange={(e) => {
+                      setTransactionPortfolioFilter(e.target.value);
+                      setTransactionPagination((current) => ({ ...current, page: 1 }));
+                    }}
+                  >
+                    <option value="all">All portfolios</option>
+                    {portfolios.map((portfolio) => (
+                      <option key={portfolio.id} value={portfolio.id}>
+                        {portfolio.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => {
+                      setTransactionSearch(transactionSearchDraft.trim());
+                      setTransactionPagination((current) => ({ ...current, page: 1 }));
+                    }}
+                  >
+                    Search
+                  </button>
+                </div>
+
+                {transactionsLoading ? (
+                  <div className="rounded-2xl border border-dashed p-4 text-sm muted">Loading transactions...</div>
+                ) : transactionPanelItems.length === 0 ? (
                   <div className="rounded-2xl border border-dashed p-4 text-sm muted">No transactions yet.</div>
                 ) : (
-                  recentTransactions.map((transaction) => (
+                  transactionPanelItems.map((transaction) => (
                     <div key={transaction.id} className="rounded-2xl border bg-black/10 p-4">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
@@ -962,6 +1407,37 @@ export default function Dashboard() {
                     </div>
                   ))
                 )}
+
+                <div className="flex items-center justify-between gap-3 pt-2">
+                  <p className="text-xs muted">
+                    Page {transactionPagination.page} of {transactionPagination.totalPages}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      disabled={transactionPagination.page <= 1 || transactionsLoading}
+                      onClick={() =>
+                        setTransactionPagination((current) => ({ ...current, page: Math.max(1, current.page - 1) }))
+                      }
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      disabled={transactionPagination.page >= transactionPagination.totalPages || transactionsLoading}
+                      onClick={() =>
+                        setTransactionPagination((current) => ({
+                          ...current,
+                          page: Math.min(current.totalPages, current.page + 1),
+                        }))
+                      }
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

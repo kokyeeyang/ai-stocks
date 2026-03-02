@@ -130,6 +130,146 @@ function computeSimpleStats(rows, days = 30) {
   };
 }
 
+function average(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function calculateSMA(values, period) {
+  if (values.length < period) return null;
+  return average(values.slice(-period));
+}
+
+function calculateEMA(values, period) {
+  if (values.length < period) return null;
+  const multiplier = 2 / (period + 1);
+  let ema = average(values.slice(0, period));
+
+  for (let index = period; index < values.length; index += 1) {
+    ema = (values[index] - ema) * multiplier + ema;
+  }
+
+  return ema;
+}
+
+function calculateRSI(values, period = 14) {
+  if (values.length <= period) return null;
+
+  let gains = 0;
+  let losses = 0;
+  for (let index = 1; index <= period; index += 1) {
+    const delta = values[index] - values[index - 1];
+    if (delta >= 0) gains += delta;
+    else losses += Math.abs(delta);
+  }
+
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+
+  for (let index = period + 1; index < values.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    const gain = delta > 0 ? delta : 0;
+    const loss = delta < 0 ? Math.abs(delta) : 0;
+
+    avgGain = ((avgGain * (period - 1)) + gain) / period;
+    avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+function calculateReturn(closes, periodsAgo) {
+  if (closes.length <= periodsAgo) return null;
+  const start = closes[closes.length - 1 - periodsAgo];
+  const end = closes[closes.length - 1];
+  if (!start) return null;
+  return ((end - start) / start) * 100;
+}
+
+function computeTechnicalIndicators(rows) {
+  const closes = rows.map((row) => row.close);
+  const volumes = rows.map((row) => row.volume || 0);
+  const latestClose = closes[closes.length - 1] ?? null;
+  const sma20 = calculateSMA(closes, 20);
+  const sma50 = calculateSMA(closes, 50);
+  const ema12 = calculateEMA(closes, 12);
+  const ema26 = calculateEMA(closes, 26);
+  const macd = ema12 !== null && ema26 !== null ? ema12 - ema26 : null;
+  const macdSignalSeriesBase = closes.slice(-80);
+  const macdSignal = macdSignalSeriesBase.length >= 35
+    ? (() => {
+        const series = [];
+        for (let index = 26; index < macdSignalSeriesBase.length; index += 1) {
+          const slice = macdSignalSeriesBase.slice(0, index + 1);
+          const fast = calculateEMA(slice, 12);
+          const slow = calculateEMA(slice, 26);
+          if (fast !== null && slow !== null) series.push(fast - slow);
+        }
+        return calculateEMA(series, 9);
+      })()
+    : null;
+  const rsi14 = calculateRSI(closes, 14);
+  const trailing252 = rows.slice(-252);
+  const trailingHigh = trailing252.length ? Math.max(...trailing252.map((row) => row.high || row.close)) : null;
+  const trailingLow = trailing252.length ? Math.min(...trailing252.map((row) => row.low || row.close)) : null;
+  const averageVolume20 = calculateSMA(volumes, 20);
+  const latestVolume = volumes[volumes.length - 1] ?? null;
+  const oneDayReturn = calculateReturn(closes, 1);
+  const oneWeekReturn = calculateReturn(closes, 5);
+  const oneMonthReturn = calculateReturn(closes, 21);
+
+  const trendLabel =
+    latestClose !== null && sma20 !== null && sma50 !== null
+      ? latestClose > sma20 && sma20 > sma50
+        ? "bullish"
+        : latestClose < sma20 && sma20 < sma50
+          ? "bearish"
+          : "mixed"
+      : "mixed";
+
+  const momentumLabel =
+    rsi14 === null ? "unknown" : rsi14 >= 70 ? "overbought" : rsi14 <= 30 ? "oversold" : "balanced";
+
+  const volatilityLabel =
+    rows.length < 20
+      ? "unknown"
+      : (() => {
+          const recentMoves = [];
+          for (let index = Math.max(1, rows.length - 20); index < rows.length; index += 1) {
+            recentMoves.push(Math.abs(((rows[index].close - rows[index - 1].close) / rows[index - 1].close) * 100));
+          }
+          const avgMove = average(recentMoves);
+          if (avgMove >= 3) return "high";
+          if (avgMove >= 1.5) return "medium";
+          return "low";
+        })();
+
+  return {
+    latestClose: latestClose !== null ? Number(latestClose.toFixed(2)) : null,
+    sma20: sma20 !== null ? Number(sma20.toFixed(2)) : null,
+    sma50: sma50 !== null ? Number(sma50.toFixed(2)) : null,
+    rsi14: rsi14 !== null ? Number(rsi14.toFixed(2)) : null,
+    macd: macd !== null ? Number(macd.toFixed(3)) : null,
+    macdSignal: macdSignal !== null ? Number(macdSignal.toFixed(3)) : null,
+    trailing52WeekHigh: trailingHigh !== null ? Number(trailingHigh.toFixed(2)) : null,
+    trailing52WeekLow: trailingLow !== null ? Number(trailingLow.toFixed(2)) : null,
+    averageVolume20: averageVolume20 !== null ? Math.round(averageVolume20) : null,
+    latestVolume: latestVolume !== null ? Math.round(latestVolume) : null,
+    returns: {
+      day1: oneDayReturn !== null ? Number(oneDayReturn.toFixed(2)) : null,
+      week1: oneWeekReturn !== null ? Number(oneWeekReturn.toFixed(2)) : null,
+      month1: oneMonthReturn !== null ? Number(oneMonthReturn.toFixed(2)) : null,
+    },
+    labels: {
+      trend: trendLabel,
+      momentum: momentumLabel,
+      volatility: volatilityLabel,
+    },
+  };
+}
+
 export function createApp({
   prisma,
   openai,
@@ -210,6 +350,29 @@ export function createApp({
     return new Map(latestRows.filter(Boolean));
   }
 
+  async function buildLatestAnalysisMap(userId, watchlistIds = []) {
+    if (!watchlistIds.length) return new Map();
+
+    const analyses = await prisma.stockAnalysis.findMany({
+      where: {
+        userId,
+        watchlistId: { in: watchlistIds },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    });
+
+    const latestMap = new Map();
+    for (const analysis of analyses) {
+      const key = `${analysis.watchlistId}:${analysis.ticker}`;
+      if (!latestMap.has(key)) {
+        latestMap.set(key, analysis);
+      }
+    }
+
+    return latestMap;
+  }
+
   async function getOwnedWatchlistOrNull(userId, watchlistId) {
     return prisma.watchlist.findFirst({
       where: { id: watchlistId, userId },
@@ -230,6 +393,8 @@ export function createApp({
       ticker: analysis.ticker,
       summary: analysis.summary,
       data,
+      indicators: data.indicators || null,
+      chartSeries: data.chartSeries || [],
       news: data.news || null,
       newsSentiment: data.newsSentiment || null,
       cached: analysis.cached,
@@ -237,6 +402,24 @@ export function createApp({
       watchlistId: analysis.watchlistId,
       portfolioId: analysis.portfolioId,
     };
+  }
+
+  function hasCompleteAnalysisData(analysis) {
+    const data = analysis?.dataJson || {};
+    return Boolean(
+      data &&
+      data.indicators &&
+      Array.isArray(data.chartSeries) &&
+      data.chartSeries.length > 0
+    );
+  }
+
+  function parsePage(value, defaultValue = 1) {
+    return Math.max(Number(value || defaultValue) || defaultValue, 1);
+  }
+
+  function parseLimit(value, defaultValue, maxValue = 100) {
+    return Math.min(Math.max(Number(value || defaultValue) || defaultValue, 1), maxValue);
   }
 
   app.post("/auth/signup", async (req, res) => {
@@ -312,7 +495,30 @@ export function createApp({
       orderBy: { createdAt: "desc" },
     });
 
-    res.json({ ok: true, watchlists });
+    const symbols = watchlists.flatMap((watchlist) => watchlist.items.map((item) => item.symbol));
+    const latestCloseMap = await buildLatestCloseMap(symbols);
+    const latestAnalysisMap = await buildLatestAnalysisMap(req.user.sub, watchlists.map((watchlist) => watchlist.id));
+
+    const enrichedWatchlists = watchlists.map((watchlist) => ({
+      ...watchlist,
+      items: watchlist.items.map((item) => {
+        const latestAnalysis = latestAnalysisMap.get(`${watchlist.id}:${item.symbol}`) || null;
+        return {
+          ...item,
+          latestClose: latestCloseMap.get(item.symbol) ?? null,
+          latestAnalysis: latestAnalysis
+            ? {
+                id: latestAnalysis.id,
+                createdAt: latestAnalysis.createdAt,
+                summary: latestAnalysis.summary,
+                cached: latestAnalysis.cached,
+              }
+            : null,
+        };
+      }),
+    }));
+
+    res.json({ ok: true, watchlists: enrichedWatchlists });
   });
 
   app.post("/watchlists", requireAuth, async (req, res) => {
@@ -530,20 +736,125 @@ export function createApp({
     const ticker = req.query.ticker ? String(req.query.ticker).trim().toUpperCase() : undefined;
     const watchlistId = req.query.watchlistId ? String(req.query.watchlistId).trim() : undefined;
     const portfolioId = req.query.portfolioId ? String(req.query.portfolioId).trim() : undefined;
-    const take = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+    const q = req.query.q ? String(req.query.q).trim() : "";
+    const context = req.query.context ? String(req.query.context).trim().toLowerCase() : "all";
+    const page = parsePage(req.query.page, 1);
+    const take = parseLimit(req.query.limit, 20, 100);
+    const skip = (page - 1) * take;
+    const where = {
+      userId: req.user.sub,
+      ...(ticker ? { ticker: normalizeTicker(ticker) || ticker } : {}),
+      ...(watchlistId ? { watchlistId } : {}),
+      ...(portfolioId ? { portfolioId } : {}),
+      ...(q
+        ? {
+            OR: [
+              { ticker: { contains: q.toUpperCase() } },
+              { summary: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+      ...(context === "watchlist"
+        ? { watchlistId: { not: null } }
+        : context === "portfolio"
+          ? { portfolioId: { not: null } }
+          : context === "direct"
+            ? { watchlistId: null, portfolioId: null }
+            : {}),
+    };
 
-    const analyses = await prisma.stockAnalysis.findMany({
-      where: {
-        userId: req.user.sub,
-        ...(ticker ? { ticker: normalizeTicker(ticker) || ticker } : {}),
-        ...(watchlistId ? { watchlistId } : {}),
-        ...(portfolioId ? { portfolioId } : {}),
-      },
+    const [analyses, total] = await Promise.all([
+      prisma.stockAnalysis.findMany({
+      where,
       orderBy: { createdAt: "desc" },
       take,
-    });
+      skip,
+    }),
+      prisma.stockAnalysis.count({ where }),
+    ]);
 
-    res.json({ ok: true, analyses: analyses.map(toAnalysisResponse) });
+    res.json({
+      ok: true,
+      analyses: analyses.map(toAnalysisResponse),
+      pagination: {
+        page,
+        limit: take,
+        total,
+        totalPages: Math.max(Math.ceil(total / take), 1),
+      },
+    });
+  });
+
+  app.get("/transactions", requireAuth, async (req, res) => {
+    const q = req.query.q ? String(req.query.q).trim() : "";
+    const type = req.query.type ? String(req.query.type).trim().toUpperCase() : "ALL";
+    const portfolioId = req.query.portfolioId ? String(req.query.portfolioId).trim() : "";
+    const page = parsePage(req.query.page, 1);
+    const take = parseLimit(req.query.limit, 8, 50);
+    const skip = (page - 1) * take;
+
+    const where = {
+      portfolio: {
+        is: {
+          userId: req.user.sub,
+          ...(portfolioId ? { id: portfolioId } : {}),
+        },
+      },
+      ...(type === "BUY" || type === "SELL" ? { type } : {}),
+      ...(q
+        ? {
+            OR: [
+              { symbol: { contains: q.toUpperCase() } },
+              { notes: { contains: q, mode: "insensitive" } },
+              {
+                portfolio: {
+                  is: {
+                    userId: req.user.sub,
+                    ...(portfolioId ? { id: portfolioId } : {}),
+                    name: { contains: q, mode: "insensitive" },
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+
+    const [transactions, total] = await Promise.all([
+      prisma.portfolioTransaction.findMany({
+        where,
+        include: {
+          portfolio: {
+            select: { id: true, name: true },
+          },
+        },
+        orderBy: [{ executedAt: "desc" }, { createdAt: "desc" }],
+        take,
+        skip,
+      }),
+      prisma.portfolioTransaction.count({ where }),
+    ]);
+
+    res.json({
+      ok: true,
+      transactions: transactions.map((transaction) => ({
+        id: transaction.id,
+        type: transaction.type,
+        symbol: transaction.symbol,
+        quantity: transaction.quantity,
+        price: transaction.price,
+        notes: transaction.notes,
+        executedAt: transaction.executedAt,
+        portfolioId: transaction.portfolio.id,
+        portfolioName: transaction.portfolio.name,
+      })),
+      pagination: {
+        page,
+        limit: take,
+        total,
+        totalPages: Math.max(Math.ceil(total / take), 1),
+      },
+    });
   });
 
   app.get("/watchlists/:id/analyses", requireAuth, async (req, res) => {
@@ -610,14 +921,14 @@ export function createApp({
       orderBy: { createdAt: "desc" },
     });
 
-    if (cached) {
+    if (cached && hasCompleteAnalysisData(cached)) {
       return res.json({ ok: true, ...toAnalysisResponse({ ...cached, cached: true }) });
     }
 
     const dbRowsDesc = await prisma.dailyPrice.findMany({
       where: { symbol: ticker },
       orderBy: { date: "desc" },
-      take: 120,
+      take: 260,
     });
 
     if (dbRowsDesc.length < 30) {
@@ -637,7 +948,13 @@ export function createApp({
     }));
 
     const stats = computeSimpleStats(mapped, 60);
+    const indicators = computeTechnicalIndicators(mapped);
     const last20 = mapped.slice(-20).map((row) => ({
+      date: row.date,
+      close: row.close,
+      volume: row.volume,
+    }));
+    const chartSeries = mapped.slice(-60).map((row) => ({
       date: row.date,
       close: row.close,
       volume: row.volume,
@@ -664,7 +981,9 @@ export function createApp({
     const prompt = {
       ticker,
       stats,
+      indicators,
       last20,
+      chartSeries,
       newsSentiment: newsBundle.aggregate,
       newsHeadlines: newsBundle.articles.map((article) => ({
         title: article.title,
@@ -687,7 +1006,7 @@ export function createApp({
           role: "user",
           content:
             `Analyze this stock data and explain:\n` +
-            `1) trend summary, 2) volatility/risk signals, 3) notable volume shifts, 4) news sentiment context, 5) what to watch next.\n\n` +
+            `1) trend summary, 2) technical indicator context, 3) volatility/risk signals, 4) notable volume shifts, 5) news sentiment context, 6) what to watch next.\n\n` +
             `Return plain text with short bullet points.\n\nDATA:\n${JSON.stringify(prompt)}`,
         },
       ],
