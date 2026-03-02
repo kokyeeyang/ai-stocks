@@ -16,6 +16,28 @@ type AnalysisResult = {
   ticker: string;
   summary: string;
   data: unknown;
+  news?: {
+    articles: Array<{
+      title: string;
+      url: string;
+      source: string;
+      publishedAt: string | null;
+      summary: string;
+      sentimentScore: number;
+      sentimentLabel: string;
+      relevanceScore: number;
+    }>;
+    skipped: boolean;
+    reason: string | null;
+  } | null;
+  newsSentiment?: {
+    label: string;
+    averageScore: number;
+    articleCount: number;
+    positiveCount: number;
+    neutralCount: number;
+    negativeCount: number;
+  } | null;
   createdAt: string;
   watchlistId: string | null;
   portfolioId: string | null;
@@ -68,9 +90,16 @@ type Portfolio = {
   };
 };
 
+type DashboardPanel = "portfolios" | "analyses" | "transactions" | null;
+
 function formatMoney(value: number | null | undefined) {
   if (value === null || value === undefined) return "--";
   return `$${value.toFixed(2)}`;
+}
+
+function formatSentimentLabel(value: string | null | undefined) {
+  if (!value) return "No signal";
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 export default function Dashboard() {
@@ -87,6 +116,7 @@ export default function Dashboard() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceMsg, setWorkspaceMsg] = useState("");
   const [recentAnalyses, setRecentAnalyses] = useState<AnalysisResult[]>([]);
+  const [activePanel, setActivePanel] = useState<DashboardPanel>(null);
 
   const [newWatchlistName, setNewWatchlistName] = useState("");
   const [watchlistTickerInputs, setWatchlistTickerInputs] = useState<Record<string, string>>({});
@@ -358,10 +388,29 @@ export default function Dashboard() {
     }
   }
 
+  const recentTransactions = portfolios
+    .flatMap((portfolio) =>
+      portfolio.transactions.map((transaction) => ({
+        ...transaction,
+        portfolioId: portfolio.id,
+        portfolioName: portfolio.name,
+      }))
+    )
+    .sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
+
+  const portfolioTotals = portfolios.reduce(
+    (totals, portfolio) => ({
+      value: totals.value + (portfolio.summary?.totalMarketValue || 0),
+      unrealized: totals.unrealized + (portfolio.summary?.unrealizedPnL || 0),
+      realized: totals.realized + (portfolio.summary?.realizedPnL || 0),
+    }),
+    { value: 0, unrealized: 0, realized: 0 }
+  );
+
   return (
     <div className="page">
-      <div className="container-app flex min-h-screen items-center justify-center py-10">
-        <div className="w-full max-w-6xl">
+      <div className="min-h-screen px-3 py-6 sm:px-5 lg:px-8 xl:px-10 2xl:px-12">
+        <div className="mx-auto w-full max-w-[1800px]">
           <div className="mb-6 text-center">
             <div className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-gradient-to-r from-[rgb(var(--accent))] to-[rgb(var(--accent2))]" />
             <h1 className="h1">Dashboard</h1>
@@ -377,8 +426,8 @@ export default function Dashboard() {
             </button>
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <div className="space-y-6">
+          <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)_340px]">
+            <div className="space-y-6 xl:min-w-0">
               <div className="card card-pad">
                 <h2 className="h2">Analyze</h2>
                 <p className="mt-1 muted text-sm">Quick commentary based on recent price and volume.</p>
@@ -547,47 +596,107 @@ export default function Dashboard() {
                 )}
               </div>
 
-              <div className="card card-pad">
-                <h2 className="h2">Recent analyses</h2>
-                <p className="mt-1 text-sm muted">Saved history across your account.</p>
+            </div>
 
-                <div className="mt-6 space-y-3">
-                  {recentAnalyses.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed p-4 text-sm muted">
-                      No saved analyses yet.
+            <div className="space-y-6">
+              <div className="card card-pad">
+                <h2 className="h2">News sentiment</h2>
+                <p className="mt-1 text-sm muted">Recent headline tone for the selected ticker.</p>
+
+                {!result ? (
+                  <div className="mt-6 rounded-2xl border border-dashed p-4 text-sm muted">
+                    Run an analysis to load recent news context.
+                  </div>
+                ) : result.newsSentiment ? (
+                  <div className="mt-6 space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                      <div className="rounded-2xl border bg-black/10 p-4">
+                        <p className="text-xs muted">Signal</p>
+                        <p className="mt-1 text-sm text-white">{formatSentimentLabel(result.newsSentiment.label)}</p>
+                      </div>
+                      <div className="rounded-2xl border bg-black/10 p-4">
+                        <p className="text-xs muted">Avg score</p>
+                        <p className="mt-1 text-sm text-white">{result.newsSentiment.averageScore.toFixed(3)}</p>
+                      </div>
+                      <div className="rounded-2xl border bg-black/10 p-4">
+                        <p className="text-xs muted">Articles</p>
+                        <p className="mt-1 text-sm text-white">{result.newsSentiment.articleCount}</p>
+                      </div>
+                      <div className="rounded-2xl border bg-black/10 p-4">
+                        <p className="text-xs muted">Pos / Neu / Neg</p>
+                        <p className="mt-1 text-sm text-white">
+                          {result.newsSentiment.positiveCount} / {result.newsSentiment.neutralCount} / {result.newsSentiment.negativeCount}
+                        </p>
+                      </div>
                     </div>
-                  ) : (
-                    recentAnalyses.map((analysis) => (
-                      <button
-                        key={analysis.id}
-                        type="button"
-                        className="w-full rounded-2xl border bg-black/10 p-4 text-left hover:bg-white/5"
-                        onClick={() => {
-                          setTicker(analysis.ticker);
-                          setResult(analysis);
-                        }}
+
+                    {(result.news?.articles || []).slice(0, 2).map((article, index) => (
+                      <a
+                        key={`${article.url}-${index}`}
+                        href={article.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block rounded-2xl border bg-black/10 p-4 hover:bg-white/5"
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="badge">{analysis.ticker}</span>
-                            <span className="badge muted">{analysis.cached ? "Cached" : "Fresh"}</span>
-                          </div>
-                          <span className="text-xs muted">
-                            {new Date(analysis.createdAt).toLocaleString()}
-                          </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="badge">{formatSentimentLabel(article.sentimentLabel)}</span>
+                          <span className="text-xs muted">{article.source}</span>
                         </div>
-                        <p className="mt-3 line-clamp-3 text-sm muted">{analysis.summary}</p>
-                      </button>
-                    ))
-                  )}
-                </div>
+                        <p className="mt-3 text-sm text-white">{article.title}</p>
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-6 rounded-2xl border border-dashed p-4 text-sm muted">
+                    {result.news?.reason || "No recent news sentiment available for this ticker."}
+                  </div>
+                )}
               </div>
 
               <div className="card card-pad">
-                <h2 className="h2">Portfolios</h2>
-                <p className="mt-1 text-sm muted">Track positions, cost basis, and current value.</p>
+                <h2 className="h2">Workspace</h2>
+                <p className="mt-1 text-sm muted">Open detail-heavy sections only when you need them.</p>
 
-                <form className="mt-4 space-y-3" onSubmit={createPortfolio}>
+                {(workspaceMsg || workspaceLoading) && (
+                  <div className="mt-4 rounded-xl border bg-white/5 px-4 py-3 text-sm muted">
+                    {workspaceLoading ? "Refreshing workspace..." : workspaceMsg}
+                  </div>
+                )}
+
+                <div className="mt-6 grid gap-3">
+                  <div className="rounded-2xl border bg-black/10 p-4">
+                    <p className="text-xs muted">Portfolios</p>
+                    <p className="mt-1 text-sm text-white">{portfolios.length}</p>
+                    <p className="mt-2 text-xs muted">
+                      Value {formatMoney(portfolioTotals.value)} | Unrealized {formatMoney(portfolioTotals.unrealized)}
+                    </p>
+                    <button type="button" className="btn-ghost mt-4 w-full" onClick={() => setActivePanel("portfolios")}>
+                      Open portfolios
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border bg-black/10 p-4">
+                    <p className="text-xs muted">Recent analyses</p>
+                    <p className="mt-1 text-sm text-white">{recentAnalyses.length}</p>
+                    <p className="mt-2 text-xs muted">
+                      Latest {recentAnalyses[0] ? new Date(recentAnalyses[0].createdAt).toLocaleString() : "none yet"}
+                    </p>
+                    <button type="button" className="btn-ghost mt-4 w-full" onClick={() => setActivePanel("analyses")}>
+                      Open analyses
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border bg-black/10 p-4">
+                    <p className="text-xs muted">Recent transactions</p>
+                    <p className="mt-1 text-sm text-white">{recentTransactions.length}</p>
+                    <p className="mt-2 text-xs muted">Realized {formatMoney(portfolioTotals.realized)}</p>
+                    <button type="button" className="btn-ghost mt-4 w-full" onClick={() => setActivePanel("transactions")}>
+                      Open transactions
+                    </button>
+                  </div>
+                </div>
+
+                <form className="mt-6 space-y-3" onSubmit={createPortfolio}>
                   <input
                     className="input"
                     value={newPortfolioName}
@@ -598,207 +707,6 @@ export default function Dashboard() {
                     Create portfolio
                   </button>
                 </form>
-
-                {(workspaceMsg || workspaceLoading) && (
-                  <div className="mt-4 rounded-xl border bg-white/5 px-4 py-3 text-sm muted">
-                    {workspaceLoading ? "Refreshing workspace..." : workspaceMsg}
-                  </div>
-                )}
-
-                <div className="mt-6 space-y-4">
-                  {portfolios.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed p-4 text-sm muted">
-                      No portfolios yet.
-                    </div>
-                  ) : (
-                    portfolios.map((portfolio) => (
-                      <div key={portfolio.id} className="rounded-2xl border bg-black/10 p-5">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <p className="font-medium">{portfolio.name}</p>
-                            <p className="text-xs muted">
-                              {portfolio.positions.length} positions | {portfolio.transactions.length} transactions
-                            </p>
-                          </div>
-                          <div className="grid grid-cols-2 gap-3 text-right text-xs muted sm:grid-cols-4">
-                            <div>
-                              <p>Value</p>
-                              <p className="text-sm text-white">{formatMoney(portfolio.summary?.totalMarketValue)}</p>
-                            </div>
-                            <div>
-                              <p>Cost</p>
-                              <p className="text-sm text-white">{formatMoney(portfolio.summary?.totalCostBasis)}</p>
-                            </div>
-                            <div>
-                              <p>Unrealized</p>
-                              <p className="text-sm text-white">{formatMoney(portfolio.summary?.unrealizedPnL)}</p>
-                            </div>
-                            <div>
-                              <p>Realized</p>
-                              <p className="text-sm text-white">{formatMoney(portfolio.summary?.realizedPnL)}</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        <form className="mt-4 grid gap-2 md:grid-cols-[110px_1fr_1fr_1fr_auto]" onSubmit={(e) => addTransaction(portfolio.id, e)}>
-                          <select
-                            className="input"
-                            value={portfolioTransactionInputs[portfolio.id]?.type || "BUY"}
-                            onChange={(e) =>
-                              setPortfolioTransactionInputs((current) => ({
-                                ...current,
-                                [portfolio.id]: {
-                                  symbol: current[portfolio.id]?.symbol || "",
-                                  quantity: current[portfolio.id]?.quantity || "",
-                                  price: current[portfolio.id]?.price || "",
-                                  type: e.target.value as "BUY" | "SELL",
-                                },
-                              }))
-                            }
-                          >
-                            <option value="BUY">Buy</option>
-                            <option value="SELL">Sell</option>
-                          </select>
-                          <input
-                            className="input"
-                            value={portfolioTransactionInputs[portfolio.id]?.symbol || ""}
-                            onChange={(e) =>
-                              setPortfolioTransactionInputs((current) => ({
-                                ...current,
-                                [portfolio.id]: {
-                                  symbol: e.target.value.toUpperCase(),
-                                  quantity: current[portfolio.id]?.quantity || "",
-                                  price: current[portfolio.id]?.price || "",
-                                  type: current[portfolio.id]?.type || "BUY",
-                                },
-                              }))
-                            }
-                            placeholder="Ticker"
-                          />
-                          <input
-                            className="input"
-                            value={portfolioTransactionInputs[portfolio.id]?.quantity || ""}
-                            onChange={(e) =>
-                              setPortfolioTransactionInputs((current) => ({
-                                ...current,
-                                [portfolio.id]: {
-                                  symbol: current[portfolio.id]?.symbol || "",
-                                  quantity: e.target.value,
-                                  price: current[portfolio.id]?.price || "",
-                                  type: current[portfolio.id]?.type || "BUY",
-                                },
-                              }))
-                            }
-                            placeholder="Quantity"
-                            inputMode="decimal"
-                          />
-                          <input
-                            className="input"
-                            value={portfolioTransactionInputs[portfolio.id]?.price || ""}
-                            onChange={(e) =>
-                              setPortfolioTransactionInputs((current) => ({
-                                ...current,
-                                [portfolio.id]: {
-                                  symbol: current[portfolio.id]?.symbol || "",
-                                  quantity: current[portfolio.id]?.quantity || "",
-                                  price: e.target.value,
-                                  type: current[portfolio.id]?.type || "BUY",
-                                },
-                              }))
-                            }
-                            placeholder="Price"
-                            inputMode="decimal"
-                          />
-                          <button className="btn-ghost" type="submit">
-                            Add txn
-                          </button>
-                        </form>
-
-                        <div className="mt-4 space-y-3">
-                          {portfolio.positions.length === 0 ? (
-                            <div className="rounded-2xl border border-dashed p-4 text-sm muted">
-                              No positions yet.
-                            </div>
-                          ) : (
-                            portfolio.positions.map((position) => (
-                              <div key={position.symbol} className="rounded-2xl border bg-white/5 p-4">
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                  <div>
-                                    <button
-                                      type="button"
-                                      className="font-medium hover:underline"
-                                      onClick={() => analyze({ ticker: position.symbol, portfolioId: portfolio.id })}
-                                    >
-                                      {position.symbol}
-                                    </button>
-                                    <p className="text-xs muted">
-                                      {position.quantity} shares at {formatMoney(position.averageCost)}
-                                      {` | ${position.buyTransactions} buys / ${position.sellTransactions} sells`}
-                                    </p>
-                                  </div>
-                                </div>
-
-                                <div className="mt-3 grid gap-3 sm:grid-cols-4 text-xs muted">
-                                  <div>
-                                    <p>Last price</p>
-                                    <p className="text-sm text-white">{formatMoney(position.latestClose)}</p>
-                                  </div>
-                                  <div>
-                                    <p>Value</p>
-                                    <p className="text-sm text-white">{formatMoney(position.marketValue)}</p>
-                                  </div>
-                                  <div>
-                                    <p>Cost basis</p>
-                                    <p className="text-sm text-white">{formatMoney(position.costBasis)}</p>
-                                  </div>
-                                  <div>
-                                    <p>Unrealized P/L</p>
-                                    <p className="text-sm text-white">{formatMoney(position.unrealizedPnL)}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-
-                        <div className="mt-4 space-y-2">
-                          <p className="text-sm muted">Recent transactions</p>
-                          {portfolio.transactions.length === 0 ? (
-                            <div className="rounded-2xl border border-dashed p-4 text-sm muted">
-                              No transactions yet.
-                            </div>
-                          ) : (
-                            portfolio.transactions.slice(0, 8).map((transaction) => (
-                              <div key={transaction.id} className="rounded-2xl border bg-white/5 p-4">
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                  <div>
-                                    <p className="font-medium">
-                                      {transaction.type} {transaction.symbol}
-                                    </p>
-                                    <p className="text-xs muted">
-                                      {transaction.quantity} shares at {formatMoney(transaction.price)} |{" "}
-                                      {new Date(transaction.executedAt).toLocaleDateString()}
-                                    </p>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="text-sm muted hover:text-white"
-                                    onClick={() => removeTransaction(portfolio.id, transaction.id)}
-                                  >
-                                    Remove
-                                  </button>
-                                </div>
-                                {transaction.notes && (
-                                  <div className="mt-2 text-xs muted">{transaction.notes}</div>
-                                )}
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
               </div>
             </div>
           </div>
@@ -808,6 +716,257 @@ export default function Dashboard() {
           </p>
         </div>
       </div>
+
+      {activePanel && (
+        <div className="fixed inset-0 z-50 bg-black/50 p-3 sm:p-6" onClick={() => setActivePanel(null)}>
+          <div
+            className="ml-auto h-full w-full max-w-3xl overflow-y-auto rounded-3xl border bg-[rgb(var(--panel))] p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="h2">
+                  {activePanel === "portfolios"
+                    ? "Portfolios"
+                    : activePanel === "analyses"
+                      ? "Recent analyses"
+                      : "Recent transactions"}
+                </h2>
+                <p className="mt-1 text-sm muted">
+                  {activePanel === "portfolios"
+                    ? "Manage positions and add transactions."
+                    : activePanel === "analyses"
+                      ? "Reopen prior analysis runs."
+                      : "Review and remove recent portfolio transactions."}
+                </p>
+              </div>
+              <button type="button" className="btn-ghost" onClick={() => setActivePanel(null)}>
+                Close
+              </button>
+            </div>
+
+            {activePanel === "portfolios" && (
+              <div className="mt-6 space-y-4">
+                {portfolios.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed p-4 text-sm muted">No portfolios yet.</div>
+                ) : (
+                  portfolios.map((portfolio) => (
+                    <div key={portfolio.id} className="rounded-2xl border bg-black/10 p-5">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="font-medium">{portfolio.name}</p>
+                          <p className="text-xs muted">
+                            {portfolio.positions.length} positions | {portfolio.transactions.length} transactions
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-right text-xs muted sm:grid-cols-4">
+                          <div>
+                            <p>Value</p>
+                            <p className="text-sm text-white">{formatMoney(portfolio.summary?.totalMarketValue)}</p>
+                          </div>
+                          <div>
+                            <p>Cost</p>
+                            <p className="text-sm text-white">{formatMoney(portfolio.summary?.totalCostBasis)}</p>
+                          </div>
+                          <div>
+                            <p>Unrealized</p>
+                            <p className="text-sm text-white">{formatMoney(portfolio.summary?.unrealizedPnL)}</p>
+                          </div>
+                          <div>
+                            <p>Realized</p>
+                            <p className="text-sm text-white">{formatMoney(portfolio.summary?.realizedPnL)}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <form className="mt-4 grid gap-2 md:grid-cols-[110px_1fr_1fr_1fr_auto]" onSubmit={(e) => addTransaction(portfolio.id, e)}>
+                        <select
+                          className="input"
+                          value={portfolioTransactionInputs[portfolio.id]?.type || "BUY"}
+                          onChange={(e) =>
+                            setPortfolioTransactionInputs((current) => ({
+                              ...current,
+                              [portfolio.id]: {
+                                symbol: current[portfolio.id]?.symbol || "",
+                                quantity: current[portfolio.id]?.quantity || "",
+                                price: current[portfolio.id]?.price || "",
+                                type: e.target.value as "BUY" | "SELL",
+                              },
+                            }))
+                          }
+                        >
+                          <option value="BUY">Buy</option>
+                          <option value="SELL">Sell</option>
+                        </select>
+                        <input
+                          className="input"
+                          value={portfolioTransactionInputs[portfolio.id]?.symbol || ""}
+                          onChange={(e) =>
+                            setPortfolioTransactionInputs((current) => ({
+                              ...current,
+                              [portfolio.id]: {
+                                symbol: e.target.value.toUpperCase(),
+                                quantity: current[portfolio.id]?.quantity || "",
+                                price: current[portfolio.id]?.price || "",
+                                type: current[portfolio.id]?.type || "BUY",
+                              },
+                            }))
+                          }
+                          placeholder="Ticker"
+                        />
+                        <input
+                          className="input"
+                          value={portfolioTransactionInputs[portfolio.id]?.quantity || ""}
+                          onChange={(e) =>
+                            setPortfolioTransactionInputs((current) => ({
+                              ...current,
+                              [portfolio.id]: {
+                                symbol: current[portfolio.id]?.symbol || "",
+                                quantity: e.target.value,
+                                price: current[portfolio.id]?.price || "",
+                                type: current[portfolio.id]?.type || "BUY",
+                              },
+                            }))
+                          }
+                          placeholder="Quantity"
+                          inputMode="decimal"
+                        />
+                        <input
+                          className="input"
+                          value={portfolioTransactionInputs[portfolio.id]?.price || ""}
+                          onChange={(e) =>
+                            setPortfolioTransactionInputs((current) => ({
+                              ...current,
+                              [portfolio.id]: {
+                                symbol: current[portfolio.id]?.symbol || "",
+                                quantity: current[portfolio.id]?.quantity || "",
+                                price: e.target.value,
+                                type: current[portfolio.id]?.type || "BUY",
+                              },
+                            }))
+                          }
+                          placeholder="Price"
+                          inputMode="decimal"
+                        />
+                        <button className="btn-ghost" type="submit">
+                          Add txn
+                        </button>
+                      </form>
+
+                      <div className="mt-4 space-y-3">
+                        {portfolio.positions.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed p-4 text-sm muted">No positions yet.</div>
+                        ) : (
+                          portfolio.positions.map((position) => (
+                            <div key={position.symbol} className="rounded-2xl border bg-white/5 p-4">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                <div>
+                                  <button
+                                    type="button"
+                                    className="font-medium hover:underline"
+                                    onClick={() => analyze({ ticker: position.symbol, portfolioId: portfolio.id })}
+                                  >
+                                    {position.symbol}
+                                  </button>
+                                  <p className="text-xs muted">
+                                    {position.quantity} shares at {formatMoney(position.averageCost)}
+                                    {` | ${position.buyTransactions} buys / ${position.sellTransactions} sells`}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="mt-3 grid gap-3 sm:grid-cols-4 text-xs muted">
+                                <div>
+                                  <p>Last price</p>
+                                  <p className="text-sm text-white">{formatMoney(position.latestClose)}</p>
+                                </div>
+                                <div>
+                                  <p>Value</p>
+                                  <p className="text-sm text-white">{formatMoney(position.marketValue)}</p>
+                                </div>
+                                <div>
+                                  <p>Cost basis</p>
+                                  <p className="text-sm text-white">{formatMoney(position.costBasis)}</p>
+                                </div>
+                                <div>
+                                  <p>Unrealized P/L</p>
+                                  <p className="text-sm text-white">{formatMoney(position.unrealizedPnL)}</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {activePanel === "analyses" && (
+              <div className="mt-6 space-y-3">
+                {recentAnalyses.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed p-4 text-sm muted">No saved analyses yet.</div>
+                ) : (
+                  recentAnalyses.map((analysis) => (
+                    <button
+                      key={analysis.id}
+                      type="button"
+                      className="w-full rounded-2xl border bg-black/10 p-4 text-left hover:bg-white/5"
+                      onClick={() => {
+                        setTicker(analysis.ticker);
+                        setResult(analysis);
+                        setActivePanel(null);
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="badge">{analysis.ticker}</span>
+                          <span className="badge muted">{analysis.cached ? "Cached" : "Fresh"}</span>
+                        </div>
+                        <span className="text-xs muted">{new Date(analysis.createdAt).toLocaleString()}</span>
+                      </div>
+                      <p className="mt-3 line-clamp-3 text-sm muted">{analysis.summary}</p>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+
+            {activePanel === "transactions" && (
+              <div className="mt-6 space-y-3">
+                {recentTransactions.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed p-4 text-sm muted">No transactions yet.</div>
+                ) : (
+                  recentTransactions.map((transaction) => (
+                    <div key={transaction.id} className="rounded-2xl border bg-black/10 p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-medium">
+                            {transaction.type} {transaction.symbol}
+                          </p>
+                          <p className="text-xs muted">
+                            {transaction.portfolioName} | {transaction.quantity} shares at {formatMoney(transaction.price)} |{" "}
+                            {new Date(transaction.executedAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="text-sm muted hover:text-white"
+                          onClick={() => removeTransaction(transaction.portfolioId, transaction.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      {transaction.notes && <div className="mt-2 text-xs muted">{transaction.notes}</div>}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

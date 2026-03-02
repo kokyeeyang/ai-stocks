@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { z } from "zod";
+import { fetchTickerNewsSentiment } from "./news.js";
 import { normalizeTicker } from "./tickers.js";
 
 const COOKIE_NAME = "session";
@@ -222,11 +223,15 @@ export function createApp({
   }
 
   function toAnalysisResponse(analysis) {
+    const data = analysis.dataJson || {};
+
     return {
       id: analysis.id,
       ticker: analysis.ticker,
       summary: analysis.summary,
-      data: analysis.dataJson,
+      data,
+      news: data.news || null,
+      newsSentiment: data.newsSentiment || null,
       cached: analysis.cached,
       createdAt: analysis.createdAt,
       watchlistId: analysis.watchlistId,
@@ -638,7 +643,37 @@ export function createApp({
       volume: row.volume,
     }));
 
-    const prompt = { ticker, stats, last20 };
+    let newsBundle = {
+      articles: [],
+      aggregate: null,
+      skipped: true,
+      reason: "ALPHA_VANTAGE_API_KEY is not configured",
+    };
+
+    try {
+      newsBundle = await fetchTickerNewsSentiment(ticker, process.env.ALPHA_VANTAGE_API_KEY, 6);
+    } catch (error) {
+      newsBundle = {
+        articles: [],
+        aggregate: null,
+        skipped: true,
+        reason: error?.message || "Failed to fetch news",
+      };
+    }
+
+    const prompt = {
+      ticker,
+      stats,
+      last20,
+      newsSentiment: newsBundle.aggregate,
+      newsHeadlines: newsBundle.articles.map((article) => ({
+        title: article.title,
+        source: article.source,
+        publishedAt: article.publishedAt,
+        sentimentLabel: article.sentimentLabel,
+        sentimentScore: article.sentimentScore,
+      })),
+    };
     const model = process.env.OPENAI_MODEL || "gpt-5-nano";
 
     const completion = await openai.chat.completions.create({
@@ -652,7 +687,7 @@ export function createApp({
           role: "user",
           content:
             `Analyze this stock data and explain:\n` +
-            `1) trend summary, 2) volatility/risk signals, 3) notable volume shifts, 4) what to watch next.\n\n` +
+            `1) trend summary, 2) volatility/risk signals, 3) notable volume shifts, 4) news sentiment context, 5) what to watch next.\n\n` +
             `Return plain text with short bullet points.\n\nDATA:\n${JSON.stringify(prompt)}`,
         },
       ],
@@ -664,7 +699,14 @@ export function createApp({
         userId: req.user.sub,
         ticker,
         summary,
-        dataJson: prompt,
+        dataJson: {
+          ...prompt,
+          news: {
+            articles: newsBundle.articles,
+            skipped: newsBundle.skipped,
+            reason: newsBundle.reason,
+          },
+        },
         cached: false,
         watchlistId: watchlistId || null,
         portfolioId: portfolioId || null,
