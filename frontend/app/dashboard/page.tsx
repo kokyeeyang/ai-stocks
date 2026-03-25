@@ -143,6 +143,10 @@ type PanelTransaction = {
   portfolioName: string;
 };
 
+function isAnalysisResult(value: AnalysisResult | null | undefined): value is AnalysisResult {
+  return Boolean(value && value.id && value.ticker);
+}
+
 function formatMoney(value: number | null | undefined) {
   if (value === null || value === undefined) return "--";
   return `$${value.toFixed(2)}`;
@@ -276,7 +280,7 @@ export default function Dashboard() {
 
       setWatchlists(watchlistsData.watchlists || []);
       setPortfolios(portfoliosData.portfolios || []);
-      setRecentAnalyses(analysesData.analyses || []);
+      setRecentAnalyses((analysesData.analyses || []).filter(isAnalysisResult));
       setRecentTransactions(transactionsData.transactions || []);
       setRecentAnalysesTotal(analysesData.pagination?.total || 0);
       setRecentTransactionsTotal(transactionsData.pagination?.total || 0);
@@ -308,7 +312,7 @@ export default function Dashboard() {
         return;
       }
 
-      setAnalysisPanelItems(data.analyses || []);
+      setAnalysisPanelItems((data.analyses || []).filter(isAnalysisResult));
       setAnalysisPagination(data.pagination || { page, limit: 6, total: 0, totalPages: 1 });
     } finally {
       setAnalysesLoading(false);
@@ -797,7 +801,7 @@ export default function Dashboard() {
 
               <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
                 <div className="card card-pad">
-                  <h2 className="h2">Price chart for {result.ticker}</h2>
+                  <h2 className="h2">Price chart{result?.ticker ? ` for ${result.ticker}` : ""}</h2>
                   <p className="mt-1 text-sm muted">Last 60 trading sessions with closing-price trend.</p>
 
                   {!result?.chartSeries?.length ? (

@@ -1,6 +1,6 @@
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { createApp } from "../src/app.js";
+import { createApp, derivePortfolioPositions } from "../src/app.js";
 
 function createPrismaMock() {
   return {
@@ -85,6 +85,20 @@ describe("auth routes", () => {
     expect(response.status).toBe(401);
     expect(response.body.error).toBe("Invalid credentials");
   });
+
+  it("rejects duplicate signup attempts", async () => {
+    const prisma = createPrismaMock();
+    prisma.user.findUnique.mockResolvedValue({ id: "existing-user", email: "user@example.com" });
+
+    const app = createTestApp(prisma);
+    const response = await request(app)
+      .post("/auth/signup")
+      .send({ email: "user@example.com", password: "password123" });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("Email already in use");
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("portfolio transaction routes", () => {
@@ -152,5 +166,70 @@ describe("portfolio transaction routes", () => {
     expect(response.status).toBe(200);
     expect(response.body.transaction.symbol).toBe("AVGO");
     expect(prisma.portfolioTransaction.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 404 when adding a transaction to a missing portfolio", async () => {
+    const prisma = createPrismaMock();
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({ id: "user_1", email: "buyer@example.com" });
+    prisma.portfolio.findFirst.mockResolvedValue(null);
+
+    const app = createTestApp(prisma);
+    const agent = request.agent(app);
+    await agent
+      .post("/auth/signup")
+      .send({ email: "buyer@example.com", password: "password123" });
+
+    const response = await agent
+      .post("/portfolios/missing/transactions")
+      .send({ symbol: "AVGO", type: "BUY", quantity: 3, price: 150 });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe("Portfolio not found");
+    expect(prisma.portfolioTransaction.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("derivePortfolioPositions", () => {
+  it("computes realized and unrealized profit from chronologically sorted transactions", () => {
+    const latestCloseMap = new Map([["NVDA", 150]]);
+    const { positions, realizedPnL } = derivePortfolioPositions([
+      {
+        symbol: "NVDA",
+        type: "SELL",
+        quantity: 4,
+        price: 140,
+        executedAt: "2026-03-03T00:00:00.000Z",
+      },
+      {
+        symbol: "NVDA",
+        type: "BUY",
+        quantity: 10,
+        price: 100,
+        executedAt: "2026-03-01T00:00:00.000Z",
+      },
+      {
+        symbol: "NVDA",
+        type: "BUY",
+        quantity: 5,
+        price: 120,
+        executedAt: "2026-03-02T00:00:00.000Z",
+      },
+    ], latestCloseMap);
+
+    expect(realizedPnL).toBe(133.33);
+    expect(positions).toEqual([
+      {
+        symbol: "NVDA",
+        quantity: 11,
+        averageCost: 106.67,
+        costBasis: 1173.33,
+        latestClose: 150,
+        marketValue: 1650,
+        unrealizedPnL: 476.67,
+        buyTransactions: 2,
+        sellTransactions: 1,
+      },
+    ]);
   });
 });
